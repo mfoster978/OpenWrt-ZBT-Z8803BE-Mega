@@ -1,101 +1,31 @@
 #!/bin/sh
-# Optional connectivity recovery and fresh-sample-driven mwan3 preferences.
-. /usr/lib/zbt/dual-modem.sh
-. /usr/lib/zbt/speed-policy.sh
-. /usr/lib/zbt/speed-lock.sh
-RUNDIR=/tmp/modem-watchdog
+# Health collection remains active for LEDs when recovery is switched off.
+. /usr/lib/zbt/modem-recovery.sh
+. /usr/lib/zbt/mwan-runtime.sh
 umask 077
-mkdir -p "$RUNDIR" /tmp/zbt-speedtest
-get() { uci -q get "modem_watchdog.$1" 2>/dev/null || true; }
-uint() { case "$1" in ''|*[!0-9]*) echo "$2" ;; *) [ "$1" -ge 1 ] && [ "$1" -le 86400 ] && echo "$1" || echo "$2" ;; esac; }
-now() { cut -d. -f1 /proc/uptime; }
-cleanup() {
-	zbt_speed_unlock
-	rm -f "$RUNDIR/4_1.metric" "$RUNDIR/2_1.metric"
-	/usr/sbin/zbt-mwan-apply >/dev/null 2>&1 || true
-}
-trap 'cleanup; exit 0' INT TERM
-check_modem() {
-	local key="$1" section="$2" device sample value stamp last=0 speed='' bad=0 good=0 blocked=0 fails=0 last_action=0 action
-	if ! device=$(zbt_netdev "$section") ||
-	   [ "$(get "$key.enabled")" != 1 ] ||
-	   [ "$(uci -q get "qmodem.$section.enable_dial")" != 1 ] ||
-	   [ "$(uci -q get qmodem.main.enable_dial)" != 1 ]; then
-		rm -f "$RUNDIR/$section.state"
-		return 0
-	fi
-	if [ -f "$RUNDIR/$section.state" ]; then
-		read -r last speed bad good blocked fails last_action < "$RUNDIR/$section.state"
-		[ "$speed" != '-' ] || speed=''
-	fi
-	stamp=$(now)
-	# Sharing the measurement lock prevents overlapping background/UI tests.
-	if [ ! -d /tmp/zbt-speedtest/lock ]; then
-		if ping -I "$device" -c 1 -W 2 "$target" >/dev/null 2>&1; then fails=0; else fails=$((fails + 1)); fi
-	fi
-	if [ "$sampling" = 1 ] && [ $((stamp - last)) -ge "$sample_interval" ]; then
-		if zbt_speed_lock; then
-			sample=$(/usr/sbin/zbt-speed-sample "$section" download)
-			zbt_speed_unlock
-			value=$(printf '%s' "$sample" | jq -er 'select(.ok == true) | .download_mbps | numbers')
-			last=$(now)
-			if [ -n "$value" ]; then
-				speed="$value"
-				zbt_speed_transition "$speed" "$minimum" "$speed_threshold"
-			else
-				# An HTTP/DNS/time/server failure is NOT a low-speed result.
-				speed=''; bad=0; good=0; blocked=0
-				logger -t modem-watchdog "$section: throughput sample unavailable; no speed-based action"
-			fi
-		fi
-	fi
-	stamp=$(now)
-	# Do not make decisions using old measurements or a disabled sampler.
-	if [ "$sampling" != 1 ] || [ $((stamp - last)) -gt $((sample_interval * 2)) ]; then
-		blocked=0; speed=''
-	fi
-	# Slow throughput changes preference only. Never power-cycle a healthy
-	# modem simply because a speed-test server is slow.
-	if [ "$actions" = 1 ] && [ "$fails" -ge "$ping_threshold" ] && [ $((stamp - last_action)) -ge "$cooldown" ]; then
-		action=$(get "$key.action")
-		case "$action" in
-			redial) /etc/init.d/qmodem_network redial "$section" ;;
-			power_cycle)
-				zbt_slot "$section"
-				# Ignore editable GPIO strings: the section selects its own pin.
-				/etc/init.d/qmodem_network hang "$section"
-				if [ -w "/sys/class/gpio/$ZBT_POWER/value" ]; then
-					printf 0 > "/sys/class/gpio/$ZBT_POWER/value"; sleep 3
-					printf 1 > "/sys/class/gpio/$ZBT_POWER/value"
-				fi ;;
-			disconnect) /etc/init.d/qmodem_network hang "$section" ;;
-		esac
-		last_action=$(now); fails=0
-		logger -t modem-watchdog "$section: requested $action after connectivity failures"
-	fi
-	printf '%s %s %s %s %s %s %s\n' "$last" "${speed:--}" "$bad" "$good" "$blocked" "$fails" "$last_action" > "$RUNDIR/$section.state"
-}
-while [ "$(get global.enabled)" = 1 ]; do
-	interval=$(uint "$(get global.interval_seconds)" 30)
-	[ "$interval" -ge 10 ] || interval=10
-	[ "$interval" -le 60 ] || interval=60
-	# Mega's cellular priority is fixed: Modem 1 is primary, Modem 2 is
-	# failover. Retained legacy speed flags must not sample or rewrite tiers.
-	sampling=0
-	sample_interval=$(uint "$(get global.speed_test_cooldown_minutes)" 15)
-	sample_interval=$((sample_interval * 60))
-	minimum=$(get global.speed_test_min_mbps)
-	case "$minimum" in ''|*[!0-9.]*|*.*.*|.) minimum=5 ;; esac
-	speed_threshold=$(uint "$(get global.speed_fail_threshold)" 2)
-	ping_threshold=$(uint "$(get global.ping_fail_threshold)" 4)
-	cooldown=$(uint "$(get global.cooldown_seconds)" 180)
-	actions=$(get global.actions_enabled)
-	target=$(get global.ping_target); [ -n "$target" ] || target=1.1.1.1
-	check_modem modem1 4_1
-	check_modem modem2 2_1
-	# Remove a pre-upgrade temporary promotion once, then let MWAN3's health
-	# tracking decide failover within the permanent 4_1-before-2_1 policy.
-	if [ -f "$RUNDIR/4_1.metric" ] || [ -f "$RUNDIR/2_1.metric" ]; then cleanup; fi
+mkdir -p "$ZBT_RECOVERY_DIR"
+exec 7>"$ZBT_RECOVERY_DIR/worker.lock"
+flock -n 7 || exit 0
+trap 'exit 0' INT TERM
+while :; do
+	interval=$(zbt_recovery_uint "$(zbt_recovery_get global.interval_seconds)" 30 10 60)
+	for section in 4_1 2_1; do
+		zbt_recovery_resume "$section"
+		zbt_health_probe "$section" || true
+		zbt_health_save "$section"
+		# USB recovery waits must not stall health/LED checks on the peer.
+		(
+			exec 7>&-
+			exec 8>"$ZBT_RECOVERY_DIR/$section.check.lock"
+			flock -n 8 || exit 0
+			key=modem1; [ "$section" != 2_1 ] || key=modem2
+			zbt_recovery_check "$section" "$key"
+		) &
+	done
+	/usr/sbin/zbt-modem-led-poller once >/dev/null 2>&1
+	# A connected hotplug can precede the tracker's first TIME publication.
+	# Retry verified failback after that race, for Ethernet and Wi-Fi alike.
+	/usr/sbin/zbt-mwan-failback "$(zbt_mwan_winner)"
+	/usr/sbin/zbt-mwan-failback "$(zbt_mwan_winner 6)"
 	sleep "$interval"
 done
-cleanup

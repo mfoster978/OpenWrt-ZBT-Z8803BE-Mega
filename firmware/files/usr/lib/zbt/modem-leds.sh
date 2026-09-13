@@ -1,6 +1,7 @@
 #!/bin/sh
 # Only LED-class attributes are written here: never modem power, SIM or AT.
 . /usr/lib/zbt/dual-modem.sh
+. /usr/lib/zbt/modem-health.sh
 
 zbt_led_detect() {
 	zbt_slot "$1" || return 1
@@ -8,15 +9,8 @@ zbt_led_detect() {
 	ZBT_LED_POWER=$(cat "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value" 2>/dev/null) || ZBT_LED_POWER=unknown
 	ZBT_LED_DEVICE=$(zbt_netdev "$1") || ZBT_LED_DEVICE=''
 	ZBT_LED_STATE=off
-	# An enumerated modem is evidence of power even if a named GPIO cannot
-	# be read. Do not make a working modem's LED depend on that read alone.
-	if [ -d "${ZBT_SYSFS:-/sys}/bus/usb/devices/$ZBT_USB" ] || [ "$ZBT_LED_POWER" = 1 ]; then
-		ZBT_LED_STATE=waiting
-		if [ -n "$ZBT_LED_DEVICE" ] &&
-			ip addr show dev "$ZBT_LED_DEVICE" scope global 2>/dev/null | grep -qE 'inet6? '; then
-			ZBT_LED_STATE=data
-		fi
-	fi
+	# An address is not proof. Either family can verify this physical slot.
+	if [ "$ZBT_LED_POWER" != 0 ] && zbt_health_online "$1"; then ZBT_LED_STATE=data; fi
 }
 
 zbt_led_read() { cat "$ZBT_LED_PATH/$1" 2>/dev/null; }

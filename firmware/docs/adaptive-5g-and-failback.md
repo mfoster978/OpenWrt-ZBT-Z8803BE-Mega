@@ -1,5 +1,10 @@
 # Mega: adaptive 5G and verified WAN failback
 
+The subsequent [modem health/recovery update](modem-health-recovery.md) replaces
+the proto-none/120-second QMI timer described below, enables guarded GPIO
+recovery, and extends policy/failback to IPv6. Adaptive comparison limits and
+manual radio choices described here remain unchanged.
+
 ## Review outcome
 
 The September 13 router transcript was reviewed in full, including its final

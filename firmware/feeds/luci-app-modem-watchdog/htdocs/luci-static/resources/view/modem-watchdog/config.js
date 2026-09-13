@@ -40,24 +40,26 @@ return view.extend({
 			})[value] || value;
 		};
 		o = presets.option(form.Button, '_priority', _('Priority failover'),
-			_('Recommended default: SFP → WAN → Modem 1 → Modem 2. MWAN3 removes an unhealthy link after three failed checks and restores it after two good checks. Speed tests and recovery actions stay off.'));
+			_('SFP → WAN → USB tether → Modem 1 → Modem 2. MWAN3 removes an unhealthy link after three failed checks and restores it after two good checks. Your recovery settings are preserved.'));
 		o.inputstyle = 'apply';
 		o.onclick = function() { return applyPreset('priority'); };
 		o = presets.option(form.Button, '_failover', _('Fast health failover'),
-			_('Uses the same safe priority order, but fails over after two failed checks and returns to the preferred link after its first successful check. Speed tests and modem reset actions stay off.'));
+			_('Uses the same safe priority order, but fails over after two failed checks and returns to the preferred link after its first successful check. Your recovery settings are preserved.'));
 		o.inputstyle = 'apply';
 		o.onclick = function() { return applyPreset('failover'); };
 		s = m.section(form.TypedSection, 'modem_watchdog', _('Global settings'));
 		s.anonymous = true;
-		o = s.option(form.Flag, 'enabled', _('Enable watchdog service'));
-		o.default = '0';
+		o = s.option(form.Flag, 'enabled', _('Enable watchdog recovery'));
+		o.default = '1';
 		o = s.option(form.Flag, 'actions_enabled', _('Allow recovery actions'));
-		o.default = '0';
+		o.default = '1';
 		o = s.option(form.Value, 'interval_seconds', _('Check interval (seconds)'));
 		o.datatype = 'range(10,60)';
 		o.default = '30';
 		o = s.option(form.Value, 'ping_target', _('Ping target'));
 		o.default = '1.1.1.1';
+		o = s.option(form.Value, 'ping6_target', _('IPv6 ping target'));
+		o.default = '2606:4700:4700::1111';
 		o = s.option(form.Value, 'ping_fail_threshold', _('Failures before action'));
 		o.datatype = 'uinteger';
 		o.default = '4';
@@ -76,7 +78,12 @@ return view.extend({
 		o.value('disconnect', _('Disconnect modem interface'));
 		o.value('redial', _('Redial modem'));
 		o.value('power_cycle', _('Power cycle GPIO + redial'));
-		o.default = 'redial';
+		o.default = 'power_cycle';
+		o = modem.option(form.ListValue, 'redial_attempts', _('Redial attempts before GPIO recovery'), _('Default: go directly to GPIO recovery after confirmed failure. RX-error growth or QMI session loss skips soft retries. Each slot is limited to three recovery attempts per hour; working IPv4 or IPv6 prevents a reset.'));
+		o.value('0', _('None — GPIO recovery first'));
+		o.value('1', _('One attempt'));
+		o.value('2', _('Two attempts'));
+		o.default = '0';
 		o = modem.option(form.DummyValue, 'gpio_power_name', _('Fixed slot power GPIO'));
 		o.default = '5g1';
 		return m.render();

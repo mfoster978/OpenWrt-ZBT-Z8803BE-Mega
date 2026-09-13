@@ -1,5 +1,5 @@
 #!/bin/sh
-# QMI child lifecycle only. MultiWAN owns probes, health and routing policy.
+# QMI child lifecycle and netifd publication. Watchdog owns connectivity recovery.
 # No modem AT writes, SIM resets, MTU override, network restart or metric edits.
 
 zbt_qmi_now() {
@@ -70,38 +70,10 @@ zbt_qmi_cleanup() {
 	zbt_qmi_flush
 }
 
-zbt_qmi_failed() {
-	local interface family state started stamp pid now="$1" seen=0
-	# With no address in either requested family, the data call did not form.
-	# A working IPv6-only session must not be killed for lacking IPv4.
-	if ! ip -o -4 addr show dev "$modem_netcard" scope global 2>/dev/null | grep -q ' inet ' &&
-	   ! ip -o -6 addr show dev "$modem_netcard" scope global 2>/dev/null | grep -q ' inet6 '; then
-		return 0
-	fi
-	# Consume fresh results of the owner's configured interface-bound probes.
-	# Missing/paused/stale trackers are unknown, not evidence of a bad modem.
-	for family in 4 6; do
-		ip -o -"$family" addr show dev "$modem_netcard" scope global 2>/dev/null | grep -q ' inet' || continue
-		interface=$interface_name
-		[ "$family" != 6 ] || interface=$interface6_name
-		[ "$(uci -q get "mwan3.$interface.enabled")" = 1 ] || continue
-		[ -n "$(uci -q get "mwan3.$interface.track_ip")" ] || continue
-		state=$(cat "/var/run/mwan3track/$interface/STATUS" 2>/dev/null)
-		started=$(cat "/var/run/mwan3track/$interface/STARTED" 2>/dev/null)
-		stamp=$(cat "/var/run/mwan3track/$interface/TIME" 2>/dev/null)
-		pid=$(cat "/var/run/mwan3track/$interface/PID" 2>/dev/null)
-		case "$stamp:$pid" in *[!0-9:]*|:*|*:|*:0|*:1) return 1 ;; esac
-		[ "$started" = 1 ] && [ "$state" = offline ] || return 1
-		[ "$stamp" -le "$now" ] && [ $((now - stamp)) -le 60 ] || return 1
-		kill -0 "$pid" 2>/dev/null || return 1
-		seen=1
-	done
-	[ "$seen" = 1 ]
-}
-
 zbt_qmi_session() {
-	local qmi_ifindex cm_pid='' failed_since='' now
+	local qmi_ifindex cm_pid='' qmi_published4='' qmi_published6='' family interface
 	. /usr/lib/zbt/mwan-runtime.sh
+	. /usr/lib/zbt/qmi-publish.sh
 	case "$modem_config" in 4_1|2_1) ;; *) return 1 ;; esac
 	qmi_ifindex=$(cat "${ZBT_SYSFS:-/sys}/class/net/$modem_netcard/ifindex" 2>/dev/null)
 	# Bridge passthrough does not assign the router a WAN address. Do not
@@ -118,20 +90,20 @@ zbt_qmi_session() {
 	while zbt_qmi_child_alive; do
 		if [ "$bridge_enabled" != 1 ]; then
 			zbt_qmi_owned || break
-			zbt_mwan_refresh "$modem_config" "$modem_netcard" "$(ip -o -4 addr show dev "$modem_netcard" scope global 2>/dev/null | awk '/ inet / {print $4; exit}')" "$$-$cm_pid"
-			now=$(zbt_qmi_now)
-			if zbt_qmi_failed "$now"; then
-				[ -n "$failed_since" ] || failed_since=$now
-				if [ $((now - failed_since)) -ge 120 ]; then
-					logger -t qmodem_network "$modem_config data session failed for 120 seconds; cleaning up before supervised retry"
-					break
+			# Never destroy a live CM just because mwan3 has a stale offline
+			# result. Direct end-to-end recovery is owned by modem-watchdog.
+			for family in 4 6; do
+				interface=$interface_name
+				[ "$family" != 6 ] || interface=$interface6_name
+				if zbt_qmi_publish "$family" "$interface"; then
+					zbt_mwan_refresh "$modem_config" "$modem_netcard" "$(ip -o -"$family" addr show dev "$modem_netcard" scope global | awk '/ inet/ {print $4; exit}')" "$$-$cm_pid" "$family"
 				fi
-			else
-				failed_since=''
-			fi
+			done
 		fi
 		sleep 5
 	done
+	mkdir -p /tmp/modem-watchdog
+	zbt_qmi_now > "/tmp/modem-watchdog/$modem_config.qmi-lost"
 	zbt_qmi_cleanup
 	trap - INT TERM
 	# procd owns the delayed retry. Never loop here and instantly re-add the

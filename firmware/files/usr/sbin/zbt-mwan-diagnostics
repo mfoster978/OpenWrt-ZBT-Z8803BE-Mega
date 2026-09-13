@@ -1,0 +1,22 @@
+#!/bin/sh
+# Read-only routing evidence. No SSID keys, SIM identities, APNs or credentials.
+. /usr/lib/zbt/mwan-runtime.sh
+printf 'Configured priority: SFP -> WAN -> USB tether -> Modem 1 -> Modem 2\n'
+printf 'Fresh tracked IPv4 winner: %s\n' "$(zbt_mwan_winner || echo none)"
+printf 'Fresh tracked IPv6 winner: %s\n' "$(zbt_mwan_winner 6 || echo none)"
+printf '\nInstalled policies (authoritative for forwarded LAN traffic):\n'
+mwan3 status
+printf '\nWi-Fi network memberships (no credentials):\n'
+for section in $(uci -q show wireless | sed -n 's/^wireless\.\([^.=]*\)=wifi-iface$/\1/p'); do
+	printf '%s mode=%s network=%s disabled=%s\n' "$section" "$(uci -q get "wireless.$section.mode")" "$(uci -q get "wireless.$section.network")" "$(uci -q get "wireless.$section.disabled")"
+done
+printf '\nRouting rules: origin is managed only for default_rule/default_rule6; other rules are preserved, origin unverified.\n'
+for section in $(uci -q show mwan3 | sed -n 's/^mwan3\.\([^.=]*\)=rule$/\1/p'); do
+	printf '%s policy=%s family=%s source=%s source_ip=%s enabled=%s\n' "$section" "$(uci -q get "mwan3.$section.use_policy")" "$(uci -q get "mwan3.$section.family")" "$(uci -q get "mwan3.$section.src_iface")" "$(uci -q get "mwan3.$section.src_ip")" "$(uci -q get "mwan3.$section.enabled")"
+done
+printf '\nDirect modem health: uptime device ifindex overall IPv4 IPv6\n'
+for slot in 4_1 2_1; do printf '%s: ' "$slot"; cat "/tmp/zbt-modem-health/$slot" 2>/dev/null || echo unknown; done
+printf '\nIPv4 rules:\n'; ip -4 rule show
+printf '\nIPv6 rules:\n'; ip -6 rule show
+printf '\nRecent failback and recovery events:\n'
+logread | grep -E 'zbt-mwan-failback|modem-watchdog' | tail -30

@@ -12,33 +12,36 @@ zbt_mwan_online() {
 	[ "$stamp" -le "$now" ] && [ $((now - stamp)) -le 60 ] && kill -0 "$pid" 2>/dev/null
 }
 zbt_mwan_winner() {
-	local interface
-	for interface in wan_sfp wan usb_tether 4_1 2_1; do
+	local interface order='wan_sfp wan usb_tether 4_1 2_1'
+	[ "${1:-4}" != 6 ] || order='wan_sfp6 wan6 usb_tether6 4_1v6 2_1v6'
+	for interface in $order; do
 		if zbt_mwan_online "$interface"; then echo "$interface"; return 0; fi
 	done
 	return 1
 }
 zbt_mwan_refresh() {
-	local section="$1" device="$2" address="$3" generation="${4:-}" path state now last=0 previous=''
+	local section="$1" device="$2" address="$3" generation="${4:-}" family="${5:-4}" interface path state now last=0 previous=''
 	case "$section" in 4_1|2_1) ;; *) return 1 ;; esac
+	interface=$section
+	[ "$family" != 6 ] || interface="${section}v6"
 	[ -n "$address" ] || return 0
-	[ "$(uci -q get "mwan3.$section.enabled")" = 1 ] || return 0
-	[ "$(uci -q get "network.$section.modem_config")" = "$section" ] || return 1
+	[ "$(uci -q get "mwan3.$interface.enabled")" = 1 ] || return 0
+	[ "$(uci -q get "network.$interface.modem_config")" = "$section" ] || return 1
 	[ "$(zbt_netdev "$section")" = "$device" ] || return 1
 	# The adaptive worker owns the temporary pause and explicitly resumes it.
 	[ ! -f "/tmp/zbt-5g/$section/maintenance" ] || return 0
 	path="${ZBT_MWAN_REFRESH:-/tmp/zbt-mwan-refresh}"
 	mkdir -p "$path"
-	read -r last previous 2>/dev/null < "$path/$section" || true
+	read -r last previous 2>/dev/null < "$path/$interface" || true
 	case "$last" in ''|*[!0-9]*) last=0 ;; esac
 	now=$(zbt_mwan_now)
-	state=$(cat "${ZBT_MWAN_TRACK:-/var/run/mwan3track}/$section/STATUS" 2>/dev/null)
+	state=$(cat "${ZBT_MWAN_TRACK:-/var/run/mwan3track}/$interface/STATUS" 2>/dev/null)
 	if [ "$previous" != "$device:$address:$generation" ] || {
 		case "$state" in paused|disabled|'') [ $((now - last)) -ge 60 ] ;; *) false ;; esac
 		}; then
-		# QMI can receive its IP after netifd's original proto-none ifup. Rebuild
+		# QMI publishes its IP asynchronously after protocol setup. Rebuild
 		# only this tracker/routing table with the now-valid device and source IP.
-		printf '%s %s\n' "$now" "$device:$address:$generation" > "$path/$section"
-		/usr/sbin/mwan3 ifup "$section" >/dev/null 2>&1
+		printf '%s %s\n' "$now" "$device:$address:$generation" > "$path/$interface"
+		/usr/sbin/mwan3 ifup "$interface" >/dev/null 2>&1
 	fi
 }

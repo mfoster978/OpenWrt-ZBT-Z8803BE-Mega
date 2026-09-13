@@ -5,21 +5,32 @@
 . /lib/functions/network.sh
 . /lib/mwan3/mwan3.sh
 . /usr/lib/zbt/mwan-runtime.sh
-case "$1" in wan_sfp|wan|usb_tether|4_1|2_1) ;; *) exit 0 ;; esac
+family=4; policy=failover; connfamily=ipv4; default_rule=default_rule
+order='wan_sfp wan usb_tether 4_1 2_1'; policy_command=$IPT4
+case "$1" in
+	wan_sfp|wan|usb_tether|4_1|2_1) ;;
+	wan_sfp6|wan6|usb_tether6|4_1v6|2_1v6)
+		family=6; policy=failover6; connfamily=ipv6; default_rule=default_rule6
+		order='wan_sfp6 wan6 usb_tether6 4_1v6 2_1v6'; policy_command=$IPT6 ;;
+	*) exit 0 ;;
+esac
 [ ! -f /tmp/zbt-5g/4_1/maintenance ] && [ ! -f /tmp/zbt-5g/2_1/maintenance ] || exit 0
-[ "$(uci -q get mwan3.default_rule.use_policy)" = failover ] || exit 0
+[ "$(uci -q get mwan3.$default_rule.use_policy)" = "$policy" ] || exit 0
 [ -z "$(uci -q changes mwan3)" ] || exit 0
-[ "$(zbt_mwan_winner)" = "$1" ] || exit 0
+[ "$(zbt_mwan_winner "$family")" = "$1" ] || exit 0
 command -v conntrack >/dev/null || exit 0
 config_load mwan3
 # Do not disrupt deliberate custom policy routing: marks identify WANs, not
 # which rule selected them. With custom policies we cannot safely distinguish.
 custom=0
 check_rule() {
-	local policy enabled
+	local selected_policy enabled
 	config_get_bool enabled "$1" enabled 1
-	config_get policy "$1" use_policy
-	[ "$enabled" = 0 ] || [ "$policy" = failover ] || custom=1
+	config_get selected_policy "$1" use_policy
+	local rule_family
+	config_get rule_family "$1" family
+	[ "$rule_family" = "$connfamily" ] || [ -z "$rule_family" ] || return 0
+	[ "$enabled" = 0 ] || [ "$selected_policy" = "$policy" ] || custom=1
 }
 config_foreach check_rule rule
 [ "$custom" = 0 ] || exit 0
@@ -30,13 +41,18 @@ case "$winner_id" in ''|*[!0-9]*) exit 0 ;; esac
 winner_mark=$(mwan3_id2mask winner_id MMX_MASK)
 # Verify the installed policy actually selects this winner, not merely that
 # its ping has succeeded. Reject a weighted/multi-member policy.
-marks=$($IPT4 -S mwan3_policy_failover 2>/dev/null | sed -n 's/.*--set-xmark \([^ ]*\).*/\1/p')
+marks=$($policy_command -S "mwan3_policy_$policy" 2>/dev/null | sed -n 's/.*--set-xmark \([^ ]*\).*/\1/p')
 [ "$marks" = "$winner_mark/$MMX_MASK" ] || exit 0
 network_get_device lan_device lan || exit 0
-addresses=$(ip -o -4 addr show dev "$lan_device" scope global 2>/dev/null | awk '{print $4}')
+addresses=$(ip -o -"$family" addr show dev "$lan_device" scope global 2>/dev/null | awk '{print $4}')
 [ -n "$addresses" ] || exit 0
+# Skip repeated scans only after a fully verified application. A hotplug which
+# lacked a fresh tracker timestamp leaves no marker and is retried by the worker.
+signature="$1:$winner_mark:$(cat "/var/run/mwan3track/$1/ONLINE" 2>/dev/null):$addresses"
+record="${ZBT_FAILBACK_DIR:-/tmp/zbt-mwan-failback}/$family"
+[ "$(cat "$record" 2>/dev/null)" != "$signature" ] || exit 0
 lower=0
-for interface in wan_sfp wan usb_tether 4_1 2_1; do
+for interface in $order; do
 	if [ "$interface" = "$1" ]; then lower=1; continue; fi
 	[ "$lower" = 1 ] || continue
 	mwan3_get_iface_id id "$interface"
@@ -45,17 +61,24 @@ for interface in wan_sfp wan usb_tether 4_1 2_1; do
 	for address in $addresses; do
 		# Full mark excludes additional VPN marks. Ignore original router LAN
 		# addresses even if a router process explicitly bound to that address.
-		conntrack -L -f ipv4 --mark "$mark/0xffffffff" --orig-src "$address" --src-nat 2>/dev/null |
-		awk -v routers="$addresses" '
+		entries=$(conntrack -L -f "$connfamily" --mark "$mark/0xffffffff" --orig-src "$address" --src-nat 2>/dev/null) || exit 1
+		sources=$(printf '%s\n' "$entries" | awk -v routers="$addresses" '
 			{ src=""; for (i=1;i<=NF;i++) {
 				if ($i ~ /^src=/ && src=="") src=substr($i,5)
 			} n=split(routers,a,"[ \n]+"); localip=0
 			for(i=1;i<=n;i++) { split(a[i],b,"/"); if(src==b[1]) localip=1 }
 			if(!localip && src!="") print src }
-		' | sort -u | while read -r source; do
+		' | sort -u)
+		for source in $sources; do
 			# Avoid conntrack's obsolete --id filter (broken in some packaged
 			# builds). Recheck source, full mark and NAT in the deletion itself.
-			conntrack -D -f ipv4 --mark "$mark/0xffffffff" --orig-src "$source" --src-nat >/dev/null 2>&1 || true
+			result=0
+			conntrack -D -f "$connfamily" --mark "$mark/0xffffffff" --orig-src "$source" --src-nat >/dev/null 2>&1 || result=$?
+			# 1 also means an entry expired naturally between list and delete.
+			case "$result" in 0|1) ;; *) exit 1 ;; esac
 		done
 	done
 done
+mkdir -p "${record%/*}"
+printf '%s\n' "$signature" > "$record"
+logger -t zbt-mwan-failback "verified $connfamily $policy -> $1; unified LAN/Wi-Fi failback reconciled"

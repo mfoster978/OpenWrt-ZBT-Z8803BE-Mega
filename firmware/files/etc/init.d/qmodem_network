@@ -11,6 +11,12 @@ extra_command "modem_status" "Show one modem"
 
 ready() {
 	local section="$1" path port dev
+	# Block hotplug starts while this slot's recovery owner is still working.
+	if [ -f "/tmp/modem-watchdog/$section.recovering" ]; then
+		local owner
+		read -r owner < "/tmp/modem-watchdog/$section.recovering"
+		case "$owner" in ''|*[!0-9]*|0|1) ;; *) kill -0 "$owner" 2>/dev/null && return 1 ;; esac
+	fi
 	[ "$(uci -q get qmodem.main.enable_dial)" = 1 ] || return 1
 	[ "$(uci -q get "qmodem.$section.enable_dial")" = 1 ] || return 1
 	[ "$(uci -q get "qmodem.$section.state")" = enabled ] || return 1

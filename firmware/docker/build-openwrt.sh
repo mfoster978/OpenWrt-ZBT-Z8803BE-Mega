@@ -59,7 +59,7 @@ fi
 # Reverse only our exact known patches. Do not reset an entire checkout or
 # discard unrelated local edits while preparing a cached build.
 if ! git -C feeds/qmodem diff --quiet; then
-  for patch_name in qmodem-adaptive-v8.patch qmodem-session-lifecycle-v7.patch qmodem-radio-rpc-v6.patch qmodem-at-transport-v6.patch qmodem-connectivity-v5.patch qmodem-mega-policy-ui.patch qmodem-performance-ui.patch qmodem-5g-deployment.patch qmodem-cell-discovery.patch qmodem-dual-runtime.patch; do
+  for patch_name in qmodem-health-v9.patch qmodem-adaptive-v8.patch qmodem-session-lifecycle-v7.patch qmodem-radio-rpc-v6.patch qmodem-at-transport-v6.patch qmodem-connectivity-v5.patch qmodem-mega-policy-ui.patch qmodem-performance-ui.patch qmodem-5g-deployment.patch qmodem-cell-discovery.patch qmodem-dual-runtime.patch; do
     stack_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/$patch_name"
     # --force disables GNU patch's automatic reversal guessing. In batch
     # mode alone an absent patch can be applied while asking to reverse it.
@@ -157,7 +157,7 @@ elif ! patch --dry-run --batch --fuzz=0 --reverse -p1 -d feeds/qmodem < "$policy
 fi
 connectivity_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/qmodem-connectivity-v5.patch"
 patch --batch --fuzz=0 --forward -p1 -d feeds/qmodem < "$connectivity_patch"
-for patch_name in qmodem-at-transport-v6.patch qmodem-radio-rpc-v6.patch qmodem-session-lifecycle-v7.patch qmodem-adaptive-v8.patch; do
+for patch_name in qmodem-at-transport-v6.patch qmodem-radio-rpc-v6.patch qmodem-session-lifecycle-v7.patch qmodem-adaptive-v8.patch qmodem-health-v9.patch; do
   patch --batch --fuzz=0 --forward -p1 -d feeds/qmodem < "$(dirname "${FILES_OVERLAY_DIR}")/patches/$patch_name"
 done
 for apn in broadband NXTGENPHONE ENHANCEDPHONE firstnet-broadband fast.t-mobile.com vzwinternet h2g2 h2g2-t usccinternet; do
@@ -543,6 +543,12 @@ fi
 grep -Fq 'monitor_enabled=0' "${rootfs_dir}/usr/sbin/zbt-qmodem-profile" || {
   echo 'QModem monitoring is not disabled by default in the image' >&2; exit 4;
 }
+for runtime_file in usr/sbin/modem-watchdog etc/config/modem_watchdog etc/init.d/modem_watchdog; do
+  cmp "${CUSTOM_FEED_DIR}/luci-app-modem-watchdog/root/$runtime_file" "${rootfs_dir}/$runtime_file" || exit 4
+done
+test -x "${rootfs_dir}/lib/netifd/proto/zbtqmi.sh" || exit 4
+test -x "${rootfs_dir}/usr/libexec/ip-full" || exit 4
+grep -Fq 'proto="zbtqmi"; protov6="zbtqmi"' "${rootfs_dir}/usr/share/qmodem/modem_dial.sh" || exit 4
 test -x "${rootfs_dir}/usr/bin/zbt-speedtest" || {
   echo 'Live speed test engine missing from firmware' >&2; exit 4;
 }
@@ -576,6 +582,16 @@ cmp "${CUSTOM_FEED_DIR}/luci-app-speedtest-lite/htdocs/luci-static/resources/vie
 cmp "${CUSTOM_FEED_DIR}/luci-app-speedtest-lite/htdocs/luci-static/resources/view/speedtest-lite/style.css" \
   "${rootfs_dir}/www/luci-static/resources/view/speedtest-lite/style.css"
 required_overlay_files=(
+  lib/netifd/proto/zbtqmi.sh
+  www/luci-static/resources/protocol/zbtqmi.js
+  usr/lib/zbt/modem-health.sh
+  usr/lib/zbt/modem-recovery.sh
+  usr/lib/zbt/qmi-publish.sh
+  usr/lib/zbt/qmi-session.sh
+  usr/lib/zbt/modem-leds.sh
+  usr/sbin/zbt-modem-led-poller
+  usr/sbin/zbt-mwan-diagnostics
+  etc/uci-defaults/99-zbt-modem-recovery-v1
   usr/lib/zbt/5g-state.sh
   usr/lib/zbt/5g-adaptive.sh
   usr/lib/zbt/mwan-runtime.sh

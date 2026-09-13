@@ -48,7 +48,7 @@ function fixture() {
   }
   return { dir, sys, write, read, env: { ZBT_SYSFS: sys, CALLS: path.join(dir, 'writes'), ONLINE: 'wwan8' } };
 }
-const led = source('firmware/files/usr/lib/zbt/modem-leds.sh').replace('zbt_led_write() {', '_led_write() {');
+const led = source('firmware/files/usr/lib/zbt/modem-leds.sh').replace('zbt_led_write() {', '_led_write() {').replace(/^\. .*modem-health.sh$/m, '');
 // Model the kernel's trigger-list readback. All writes still go through the
 // production writer to real fixture files; log every attempted attribute.
 const mocks = `
@@ -63,6 +63,7 @@ zbt_led_read() {
 }
 ip() { [ "$4" = "$ONLINE" ] && echo '    inet 192.0.0.2/27 scope global'; }
 logger() { :; }
+zbt_health_online() { local dev; dev=$(zbt_netdev "$1"); [ "$dev" = "$ONLINE" ] || [ "$ONLINE" = both ]; }
 `;
 
 test('production path delegates both physical slots to the pinned Far5eer helper', () => {
@@ -74,43 +75,42 @@ test('production path delegates both physical slots to the pinned Far5eer helper
   run(led + mocks + '\nzbt_led_detect 4_1; zbt_led_apply; zbt_led_detect 2_1; zbt_led_apply', {
     ...f.env, ZBT_LED_HELPER: helper, HELPER_CALLS: helperCalls
   });
-  assert.equal(fs.readFileSync(helperCalls, 'utf8'), 'slot 1 wwan wwan8\nslot 2 no_signal\n');
+  assert.equal(fs.readFileSync(helperCalls, 'utf8'), 'slot 1 wwan wwan8\nslot 2 off\n');
 
   const hotplug = file('firmware/files/etc/hotplug.d/net/20-zbt-modem-led');
-  assert.match(hotplug, /4-1\) slot=1; led=\/sys\/class\/leds\/blue:mobile-1/);
-  assert.match(hotplug, /2-1\) slot=2; led=\/sys\/class\/leds\/blue:mobile-2/);
-  assert.match(hotplug, /\/etc\/zbt-leds\.sh slot "\$slot" wwan "\$DEVICENAME"/);
+  assert.match(hotplug, /zbt-modem-led-poller once/);
+  assert.doesNotMatch(hotplug, /slot .*wwan|>.*trigger/);
 });
 
-test('LEDs use physical slots: online primary gets activity, waiting secondary blinks', () => {
+test('LEDs use physical slots: online primary gets activity, unreachable secondary is dark', () => {
   const f = fixture();
   run(led + mocks + '\nzbt_led_detect 4_1; zbt_led_apply; zbt_led_detect 2_1; zbt_led_apply', f.env);
   assert.equal(f.read('class/leds/blue:mobile-1/trigger'), 'netdev');
   assert.equal(f.read('class/leds/blue:mobile-1/device_name'), 'wwan8');
   for (const attr of ['rx', 'tx', 'link']) assert.equal(f.read(`class/leds/blue:mobile-1/${attr}`), '1');
-  assert.equal(f.read('class/leds/blue:mobile-2/trigger'), 'timer');
-  assert.equal(f.read('class/leds/blue:mobile-2/delay_on'), '1000');
-  assert.equal(f.read('class/leds/blue:mobile-2/brightness'), '255');
+  assert.equal(f.read('class/leds/blue:mobile-2/trigger'), 'none');
+  assert.equal(f.read('class/leds/blue:mobile-2/delay_on'), '0');
+  assert.equal(f.read('class/leds/blue:mobile-2/brightness'), '0');
   assert.doesNotMatch(fs.readFileSync(f.env.CALLS, 'utf8'), /gpio|5g1|5g2|wwan3/);
   run(led + mocks + '\nzbt_led_detect 4_1; zbt_led_apply; zbt_led_detect 2_1; zbt_led_apply', { ...f.env, ONLINE: 'wwan3' });
   assert.equal(f.read('class/leds/blue:mobile-2/device_name'), 'wwan3');
   assert.equal(f.read('class/leds/blue:mobile-2/trigger'), 'netdev');
-  assert.equal(f.read('class/leds/blue:mobile-1/trigger'), 'timer');
+  assert.equal(f.read('class/leds/blue:mobile-1/trigger'), 'none');
 });
 
-test('missing GPIO read or a not-yet-created netdev does not black out a present modem', () => {
+test('missing GPIO read preserves verified connectivity; missing netdev is dark', () => {
   const f = fixture();
   fs.unlinkSync(path.join(f.sys, 'class/gpio/5g1/value'));
   fs.rmSync(path.join(f.sys, 'devices/2-1/2-1:1.4/net'), { recursive: true });
-  assert.equal(run(led + mocks + '\nzbt_led_detect 4_1; echo "$ZBT_LED_POWER:$ZBT_LED_STATE"; zbt_led_apply; zbt_led_detect 2_1; echo "$ZBT_LED_STATE"; zbt_led_apply', f.env), 'unknown:data\nwaiting');
+  assert.equal(run(led + mocks + '\nzbt_led_detect 4_1; echo "$ZBT_LED_POWER:$ZBT_LED_STATE"; zbt_led_apply; zbt_led_detect 2_1; echo "$ZBT_LED_STATE"; zbt_led_apply', f.env), 'unknown:data\noff');
   assert.equal(f.read('class/leds/blue:mobile-1/trigger'), 'netdev');
-  assert.equal(f.read('class/leds/blue:mobile-2/trigger'), 'timer');
+  assert.equal(f.read('class/leds/blue:mobile-2/trigger'), 'none');
 });
 
 test('both addressed modems recover from dark startup with independent activity bindings', () => {
   const f = fixture();
   run(led + mocks + '\nip() { echo "    inet 192.0.0.2/27 scope global"; }\n' +
-    'zbt_led_detect 4_1; zbt_led_apply; zbt_led_detect 2_1; zbt_led_apply', f.env);
+    'zbt_led_detect 4_1; zbt_led_apply; zbt_led_detect 2_1; zbt_led_apply', { ...f.env, ONLINE: 'both' });
   for (const [lamp, device] of [['blue:mobile-1', 'wwan8'], ['blue:mobile-2', 'wwan3']]) {
     assert.equal(f.read(`class/leds/${lamp}/trigger`), 'netdev');
     assert.equal(f.read(`class/leds/${lamp}/device_name`), device);
@@ -202,7 +202,7 @@ test('poller status is read-only and has one post-generic-LED S97 owner', () => 
   const poller = file('firmware/files/usr/sbin/zbt-modem-led-poller').replace('. /usr/lib/zbt/modem-leds.sh', '');
   const output = run(led + mocks + poller, f.env, ['status']);
   assert.match(output, /modem=4_1 usb=4-1.*device=wwan8 state=data/);
-  assert.match(output, /modem=2_1 usb=2-1.*device=wwan3 state=waiting/);
+  assert.match(output, /modem=2_1 usb=2-1.*device=wwan3 state=off/);
   assert.equal(fs.existsSync(f.env.CALLS), false);
   assert.match(file('firmware/files/etc/init.d/zbt-modem-leds'), /^START=97$/m);
   const builder = file('firmware/docker/build-openwrt.sh');

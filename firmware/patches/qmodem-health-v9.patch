@@ -1,0 +1,46 @@
+--- a/application/qmodem/files/usr/share/qmodem/modem_dial.sh
++++ b/application/qmodem/files/usr/share/qmodem/modem_dial.sh
+@@ -296,6 +296,11 @@
+     local type=$1
+     local modem_config=$2
+     local value=$3
++    # These two LEDs belong to verified Internet health, not dial events.
++    case "$modem_config" in 4_1|2_1)
++        /usr/sbin/zbt-modem-led-poller once >/dev/null 2>&1
++        return 0 ;;
++    esac
+     get_led "$modem_slot"
+     case $type in
+         sim)
+@@ -616,3 +616,3 @@
+     if [ -x /usr/bin/quectel-CM-M ]; then
+-        case "$driver" in qmi|mbim|mhi) proto="none"; protov6="none" ;; esac
++        case "$driver" in qmi|mbim|mhi) proto="zbtqmi"; protov6="zbtqmi" ;; esac
+     fi
+@@ -701,4 +701,4 @@
+             uci set network.${interface6_name}.proto="${protov6}"
+-            uci set network.${interface6_name}.ifname="@${interface_name}"
+-            uci set network.${interface6_name}.device="@${interface_name}"
++            uci set network.${interface6_name}.ifname="${modem_netcard}"
++            uci set network.${interface6_name}.device="${modem_netcard}"
+             uci set network.${interface6_name}.metric="${metric}"
+@@ -769,6 +774,19 @@
+ 
+     #set led
+     set_led "net" $modem_config $set_modem_netcard
++    # Repair retained proto=none/@parent companions too. A v6-only PDP must
++    # not depend on an IPv4 parent reaching ifup before IPv6 can be published.
++    if [ "$proto" = zbtqmi ] && [ "$bridge_enabled" != 1 ]; then
++        uci -q set network.${interface_name}=interface
++        for logical in "$interface_name" "$interface6_name"; do
++            uci -q get network.$logical >/dev/null || continue
++            uci -q set network.$logical.proto=zbtqmi
++            uci -q set network.$logical.modem_config="$modem_config"
++            uci -q set network.$logical.device="$target_netcard"
++            uci -q set network.$logical.ifname="$target_netcard"
++        done
++        interface_update_flag=1
++    fi
+     origin_netcard=$(uci -q get network.$interface_name.ifname)
+     origin_device=$(uci -q get network.$interface_name.device)
+     origin_metric=$(uci -q get network.$interface_name.metric)

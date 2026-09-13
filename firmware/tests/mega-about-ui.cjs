@@ -105,7 +105,7 @@ renderAbout();
     assert.match(await page.locator('#zma-features').textContent(), /USB phone tether[\s\S]*Modem 2 is standby-only/);
     assert.match(await page.locator('#zma-features').textContent(), /clean installation requires root to choose a new password/);
     assert.match(await page.locator('#zma-features').textContent(), /not the official Ookla application/);
-    assert.match(await page.locator('#zma-features').textContent(), /Additional watchdog actions are off by default/);
+    assert.match(await page.locator('#zma-features').textContent(), /Both modems default to guarded GPIO power-cycle recovery/);
     assert.equal(await page.getByText('Save & Apply', { exact: true }).count(), 0);
     assert.deepEqual(await page.evaluate(() => [about.handleSave, about.handleSaveApply, about.handleReset]), [null, null, null]);
     assert.deepEqual(await page.evaluate(() => calls), ['system.board', 'system.info', 'zbt.firmware.info']);

@@ -256,10 +256,10 @@ test('shared measurement lease rejects overlap and recovers expired workers', ()
 
 test('disabled/removed modem clears stale watchdog measurements', () => {
   const dir = sandbox();
-  let code = source('firmware/feeds/luci-app-modem-watchdog/root/usr/sbin/modem-watchdog').split('\nwhile [')[0];
+  let code = source('firmware/files/usr/lib/zbt/modem-recovery.sh').replace(/^\. .*$/gm, '');
   code = code.replaceAll('/tmp/modem-watchdog', dir).replaceAll('/tmp/zbt-speedtest', path.join(dir, 'speed'));
   fs.writeFileSync(path.join(dir, '2_1.state'), '100 1 5 0 1 4 0\n');
-  shell(code + '\nzbt_netdev() { echo wwan1; }; get() { echo 0; }; check_modem modem2 2_1');
+  shell(code + '\nzbt_health_now() { echo 300; }; zbt_recovery_allowed() { return 1; }; zbt_recovery_check 2_1 modem2');
   assert.equal(fs.existsSync(path.join(dir, '2_1.state')), false);
 });
 
@@ -598,7 +598,7 @@ test('patched scanner repairs existing profiles and qmodem_init passes slot, not
   const init = patchedFile('application/qmodem/files/etc/init.d/qmodem_init');
   assert.match(init, /modem_scan\.sh add "\$slot" "\$type"/);
   assert.doesNotMatch(init, /modem_scan\.sh add "\$path"/);
-  assert.match(patchedFile('application/qmodem/files/usr/share/qmodem/modem_dial.sh'), /qmi\|mbim\|mhi\) proto="none"; protov6="none"/);
+  assert.match(patchedFile('application/qmodem/files/usr/share/qmodem/modem_dial.sh'), /qmi\|mbim\|mhi\) proto="zbtqmi"; protov6="zbtqmi"/);
 });
 
 test('QModem consumes and preserves MWAN-owned network metrics across redial', { skip: !process.env.QMODEM_TEST_TREE }, () => {

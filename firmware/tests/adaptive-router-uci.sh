@@ -27,7 +27,7 @@ set -- failover
 . "$MEGA_TEST_REPO/firmware/files/usr/sbin/zbt-mwan-preset"
 expected='failover_wan_sfp failover_wan failover_usb_tether failover_4_1 failover_2_1'
 [ "$(uci get mwan3.failover.use_member)" = "$expected" ]
-[ "$(uci export mwan3 | grep -c 'list use_member')" = 10 ]
+[ "$(uci export mwan3 | grep -c 'list use_member')" = 12 ]
 metric=0
 for interface in wan_sfp wan usb_tether 4_1 2_1; do
 	metric=$((metric+1))
@@ -50,3 +50,25 @@ eval "$(sed '/^\/etc\/init.d\/zbt-5g-adaptive enable$/d; /^exit 0$/d' "$MEGA_TES
 [ "$(uci get qmodem.4_1.zbt_5g_policy)" = sa ]
 [ "$(uci get qmodem.2_1.zbt_5g_policy)" = auto ]
 echo 'PASS: actual ARM64 UCI repairs scalar failover into five ordered list entries; dynamic devices, APNs and explicit radio policies preserved'
+
+uci set modem_watchdog.modem1=modem
+uci set modem_watchdog.modem2=modem
+uci set modem_watchdog.global.enabled=0
+uci set modem_watchdog.global.actions_enabled=0
+touch "$fixture/config/system"
+eval "$(sed '/^\/etc\/init.d\/modem_watchdog enable$/d; /^exit 0$/d' "$MEGA_TEST_REPO/firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v1")"
+[ "$(uci get modem_watchdog.global.enabled)" = 1 ]
+[ "$(uci get modem_watchdog.global.actions_enabled)" = 1 ]
+[ "$(uci get modem_watchdog.modem1.action)" = power_cycle ]
+[ "$(uci get modem_watchdog.modem2.action)" = power_cycle ]
+uci set modem_watchdog.global.enabled=0
+uci set modem_watchdog.modem2.action=none
+uci commit
+eval "$(sed '/^\/etc\/init.d\/modem_watchdog enable$/d; /^exit 0$/d' "$MEGA_TEST_REPO/firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v1")"
+set -- failover
+. "$MEGA_TEST_REPO/firmware/files/usr/sbin/zbt-mwan-preset"
+[ "$(uci get modem_watchdog.global.enabled)" = 0 ]
+[ "$(uci get modem_watchdog.modem2.action)" = none ]
+[ "$(uci get mwan3.default_rule6.use_policy)" = failover6 ]
+[ "$(uci get mwan3.4_1v6.family)" = ipv6 ]
+echo 'PASS: actual ARM64 UCI enables guarded recovery once, preserves later opt-out across presets/upgrades, and builds separate IPv6 policy'

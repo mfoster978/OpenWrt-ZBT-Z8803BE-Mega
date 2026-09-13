@@ -1,0 +1,15 @@
+#!/bin/sh
+# Installed only in the disposable image-test container.
+if [ "${MEGA_NATIVE_NETIFD:-0}" = 1 ]; then
+	case "${0##*/}" in
+		ubus) exec /usr/bin/ubus -s "$MEGA_TEST_SOCKET" "$@" ;;
+		uci) exec /usr/bin/uci -c "$MEGA_TEST_CONFIG" "$@" ;;
+		jshn) exec /usr/bin/jshn "$@" ;;
+	esac
+fi
+case "${0##*/}" in
+	ubus) exec qemu-aarch64 -L "$MEGA_TEST_ROOTFS" "$MEGA_TEST_ROOTFS/bin/ubus" -s "$MEGA_TEST_SOCKET" "$@" ;;
+	uci) exec qemu-aarch64 -L "$MEGA_TEST_ROOTFS" "$MEGA_TEST_ROOTFS/sbin/uci" -c "$MEGA_TEST_CONFIG" "$@" ;;
+	jshn) exec qemu-aarch64 -L "$MEGA_TEST_ROOTFS" "$MEGA_TEST_ROOTFS/usr/bin/jshn" "$@" ;;
+esac
+exit 1

@@ -61,7 +61,7 @@ configure_tracking() {
 	uci -q set "mwan3.$interface=interface"
 	uci -q set "mwan3.$interface.enabled=1"
 	uci -q set "mwan3.$interface.initial_state=offline"
-	uci -q set "mwan3.$interface.family=ipv4"
+	uci -q set "mwan3.$interface.family=${6:-ipv4}"
 	uci -q set "mwan3.$interface.track_method=ping"
 	uci -q set "mwan3.$interface.reliability=1"
 	uci -q set "mwan3.$interface.count=1"
@@ -122,15 +122,40 @@ ensure_firewall_membership() {
 		}
 	done)"
 	[ -n "$wan_zone" ] || return 0
-	for interface in 4_1 2_1; do
+	for interface in 4_1 2_1 4_1v6 2_1v6; do
 		zone_owns_interface "$interface" || uci -q add_list "firewall.$wan_zone.network=$interface"
 	done
+	# Multi-provider IPv6 needs source translation: a carrier's /64 cannot
+	# be forwarded through a different carrier. Preserve explicit custom 0.
+	set_if_missing firewall "$wan_zone" masq6 1
+	# Do not force RA default-router advertisements or re-enable LAN IPv6.
+	# ra_default=1 bypasses odhcpd's upstream-route test even during an outage.
+}
+
+configure_ipv6_policy() {
+	local down_count="$1" up_count="$2" interface priority=0
+	uci -q set mwan3.failover6=policy
+	uci -q delete mwan3.failover6.use_member 2>/dev/null || true
+	for interface in wan_sfp6 wan6 usb_tether6 4_1v6 2_1v6; do
+		priority=$((priority + 1))
+		case "$interface" in 4_1v6|2_1v6) ;; *) network_exists "$interface" || continue ;; esac
+		configure_tracking "$interface" 2606:4700:4700::1111 2001:4860:4860::8888 "$down_count" "$up_count" ipv6
+		configure_member "failover6_$interface" "$interface" "$priority" 1
+		uci -q add_list "mwan3.failover6.use_member=failover6_$interface"
+	done
+	uci -q set mwan3.failover6.last_resort=unreachable
+	uci -q set mwan3.default_rule6=rule
+	uci -q set mwan3.default_rule6.family=ipv6
+	uci -q set mwan3.default_rule6.dest_ip=::/0
+	uci -q set mwan3.default_rule6.proto=all
+	uci -q set mwan3.default_rule6.use_policy=failover6
 }
 
 configure_policy() {
 	local down_count up_count
 	down_count="$1"
 	up_count="$2"
+	configure_ipv6_policy "$down_count" "$up_count"
 
 	network_exists wan_sfp && configure_tracking wan_sfp 1.1.1.1 8.8.8.8 "$down_count" "$up_count"
 	network_exists wan && configure_tracking wan 1.1.1.1 8.8.8.8 "$down_count" "$up_count"
@@ -189,10 +214,9 @@ configure_watchdog() {
 	local preset
 	preset="$1"
 	uci -q set modem_watchdog.global.routing_preset="$preset"
-	uci -q set modem_watchdog.global.actions_enabled=0
+	# Routing presets must not silently disable the recovery owner's settings.
 	case "$preset" in
 		*)
-			uci -q set modem_watchdog.global.enabled=0
 			uci -q set modem_watchdog.global.failover=0
 			uci -q set modem_watchdog.global.prefer_fastest=0
 			uci -q set modem_watchdog.global.speed_test=0
@@ -245,8 +269,11 @@ ensure_route_metric wan_sfp6 9 "$exact"
 ensure_route_metric wan 10 "$exact"
 ensure_route_metric wan6 10 "$exact"
 ensure_route_metric usb_tether 100 "$exact"
+ensure_route_metric usb_tether6 100 "$exact"
 ensure_route_metric 4_1 200 "$exact"
 ensure_route_metric 2_1 210 "$exact"
+ensure_route_metric 4_1v6 200 "$exact"
+ensure_route_metric 2_1v6 210 "$exact"
 ensure_firewall_membership
 remove_sample_config
 

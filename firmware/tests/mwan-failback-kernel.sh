@@ -5,6 +5,9 @@ set -eu
 [ "${MEGA_ISOLATED_NETWORK_TEST:-0}" = 1 ] || exit 77
 : "${MEGA_TEST_REPO:?repository required}"
 conntrack -L >/dev/null 2>&1
+ZBT_FAILBACK_DIR=$(mktemp -d)
+export ZBT_FAILBACK_DIR
+trap 'rm -rf "$ZBT_FAILBACK_DIR"' EXIT
 insert() {
 	if [ "$1" != "$3" ]; then set -- "$@" --src-nat "$3"; fi
 	conntrack -I -p tcp --timeout 300 --state ESTABLISHED \
@@ -50,3 +53,34 @@ for port in 41003 41004 41005 41006 41007; do
 	printf '%s\n' "$entries" | grep -q "sport=$port "
 done
 echo 'PASS: real kernel failback removes only lower-priority NATed LAN flows; primary, router, VPN and non-NAT flows survive'
+insert6() {
+	conntrack -I -p tcp --timeout 300 --state ESTABLISHED \
+		--orig-src "$1" --orig-dst 2001:db8:ffff::1 --sport "$2" --dport 443 \
+		--reply-src 2001:db8:ffff::1 --reply-dst 2001:db8:2::2 --reply-port-src 443 --reply-port-dst "$2" \
+		--src-nat 2001:db8:2::2 --mark "$3" >/dev/null 2>&1
+}
+insert6 fd00:1::10 42001 0x700
+insert6 fd00:1::11 42002 0x700
+insert6 fd00:1::12 42003 0x600
+insert6 fd00:1::1 42004 0x700
+insert6 fd00:1::13 42005 0x10700
+{
+	printf '%s\n' 'uci() { case "$*" in *default_rule6.use_policy) echo failover6 ;; esac; }
+config_load() { :; }
+config_foreach() { :; }
+config_get() { eval "$1=0x3F00"; }
+zbt_mwan_winner() { echo 4_1v6; }
+mwan3_get_iface_id() { case "$2" in 4_1v6) eval "$1=6" ;; 2_1v6) eval "$1=7" ;; *) eval "$1=1" ;; esac; }
+mwan3_id2mask() { eval "value=\$$1"; printf "0x%x" "$((value << 8))"; }
+network_get_device() { eval "$1=br-lan"; }
+policy() { echo "-A mwan3_policy_failover6 -j MARK --set-xmark 0x600/0x3f00"; }
+IPT4=policy; IPT6=policy
+ip() { echo "10: br-lan inet6 fd00:1::1/64 scope global"; }'
+	sed '/^\. /d' "$MEGA_TEST_REPO/firmware/files/usr/sbin/zbt-mwan-failback"
+} | sh -s 4_1v6
+entries=$(conntrack -L -f ipv6 -o extended 2>/dev/null)
+for port in 42001 42002; do
+	if printf '%s\n' "$entries" | grep -q "sport=$port "; then echo "lower priority IPv6 LAN flow survived: $port" >&2; exit 1; fi
+done
+for port in 42003 42004 42005; do printf '%s\n' "$entries" | grep -q "sport=$port "; done
+echo 'PASS: real IPv6 conntrack failback removes only lower-priority NAT66 LAN flows; primary, router and VPN-marked flows survive'

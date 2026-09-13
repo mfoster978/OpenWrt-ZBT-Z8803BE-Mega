@@ -158,7 +158,9 @@ logger() { :; }
     assert.equal(fs.readFileSync(path.join(dir, 'mwan3.' + policy + '_4_1.metric'), 'utf8'), '4');
     assert.equal(fs.readFileSync(path.join(dir, 'mwan3.' + policy + '_2_1.metric'), 'utf8'), '5');
   }
-  assert.equal(fs.readFileSync(path.join(dir, 'firewall.wanzone.network'), 'utf8'), '2_1 4_1');
+  assert.equal(fs.readFileSync(path.join(dir, 'firewall.wanzone.network'), 'utf8'), '2_1 4_1 4_1v6 2_1v6');
+  assert.equal(fs.readFileSync(path.join(dir, 'mwan3.failover6.use_member'), 'utf8').trim(), 'failover6_4_1v6 failover6_2_1v6');
+  assert.equal(fs.readFileSync(path.join(dir, 'mwan3.4_1v6.family'), 'utf8'), 'ipv6');
   assert.equal(shell(read('files/usr/lib/zbt/mwan3-speed-metric.sh') + '\nzbt_speed_metric failover_2_1 2_1 5'), '5');
   assert.doesNotMatch(read('files/usr/lib/zbt/mwan3-speed-metric.sh'), /\/tmp\/|expiry/);
 });

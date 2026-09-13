@@ -17,6 +17,7 @@ luci-proto-mbim
 quectel-CM-5G-M
 mwan3
 conntrack
+ip-full
 flock
 luci-app-mwan3
 tailscale

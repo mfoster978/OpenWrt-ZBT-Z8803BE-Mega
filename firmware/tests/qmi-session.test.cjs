@@ -10,7 +10,9 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mega-qmi-session-'));
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 let serial = 0;
 const helper = fs.readFileSync(path.join(root, 'firmware/files/usr/lib/zbt/qmi-session.sh'), 'utf8')
-  .replace('. /usr/lib/zbt/mwan-runtime.sh', 'zbt_mwan_refresh() { :; }'); // separately exercised by adaptive tests
+  .replace('. /usr/lib/zbt/mwan-runtime.sh', 'zbt_mwan_refresh() { :; }')
+  .replace('. /usr/lib/zbt/qmi-publish.sh', 'zbt_qmi_publish() { return 1; }')
+  .replaceAll('/tmp/modem-watchdog', '${MODEM_RUNDIR}/watchdog'); // separately exercised by adaptive tests
 const dual = fs.readFileSync(path.join(root, 'firmware/files/usr/lib/zbt/dual-modem.sh'), 'utf8');
 
 function fixture(options = {}, body = 'zbt_qmi_session "$DB/child"; echo result=$?') {
@@ -60,7 +62,7 @@ sleep() {
     signal) if [ ! -f "$DB/signalled" ]; then touch "$DB/signalled"; kill -TERM $$; fi ;;
   esac
   # End healthy/unknown sessions using a real child exit after observation.
-  if [ "$MODE" != stuck ] && [ "$now" -ge 380 ] && [ -n "$cm_pid" ]; then kill -TERM "$cm_pid" 2>/dev/null; fi
+  if [ "$now" -ge 380 ] && [ -n "$cm_pid" ]; then kill -TERM "$cm_pid" 2>/dev/null; fi
   busybox sleep 0.02
 }
 ` + body;
@@ -75,7 +77,8 @@ sleep() {
 test('QMI child failure cleans the selected slot, both families and stale PID, then returns to procd', () => {
   const f = fixture({ MODE: 'stuck' });
   assert.match(f.out, /result=1/);
-  assert.match(f.calls, /data session failed for 120 seconds/);
+  assert.doesNotMatch(f.calls, /data session failed for 120 seconds/);
+  assert.ok(fs.existsSync(path.join(f.dir, 'watchdog/4_1.qmi-lost')));
   for (const family of [4, 6]) {
     assert.equal(f.calls.split(`ip -${family} addr flush dev wwan8 scope global`).length - 1, 2);
     assert.equal(f.calls.split(`ip -${family} route flush dev wwan8`).length - 1, 2);
@@ -85,11 +88,11 @@ test('QMI child failure cleans the selected slot, both families and stale PID, t
   assert.doesNotMatch(f.calls, /wwan3|down 2_1|network restart|mtu|metric/);
   assert.equal(fs.existsSync(path.join(f.dir, '4_1_dir/4_1.pid')), false);
 });
-test('QMI missing address timeout covers both families, not IPv4 alone', () => {
-  assert.match(fixture({ MODE: 'stuck', ADDR4: '0', ADDR6: '0' }).calls, /failed for 120/);
+test('QMI connectivity recovery is delegated, never an address or stale tracker timer', () => {
+  assert.doesNotMatch(fixture({ MODE: 'stuck', ADDR4: '0', ADDR6: '0' }).calls, /failed for 120/);
   assert.doesNotMatch(fixture({ ADDR4: '0', ADDR6: '1' }).calls, /failed for 120/);
 });
-test('QMI respects fresh MultiWAN health; recovered, paused, stale and disabled results do not trigger recovery', () => {
+test('QMI never tears down a live session based on mwan3 health results', () => {
   for (const options of [{ MODE: 'recover' }, { MODE: 'paused' }, { STALE: '1' }, { TRACK_ENABLED: '0' }])
     assert.doesNotMatch(fixture(options).calls, /failed for 120/, JSON.stringify(options));
 });
