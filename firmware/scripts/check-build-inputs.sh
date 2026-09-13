@@ -19,6 +19,7 @@ for script in \
   firmware/files/etc/uci-defaults/99-cellular-multiwan-defaults \
   firmware/files/etc/hotplug.d/net/15-zbt-rndis-auto \
   firmware/files/etc/hotplug.d/usb/40-zbt-qmodem-autoenable \
+  firmware/files/usr/lib/zbt/qmodem-start.sh \
   firmware/files/usr/sbin/speedify-installer-loop \
   firmware/files/usr/sbin/zbt-luci-backend-check \
   firmware/files/usr/sbin/zbt-mwan-preset \

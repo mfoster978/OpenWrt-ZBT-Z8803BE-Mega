@@ -33,7 +33,7 @@ Default recovery settings, applied once on a kept-config upgrade as requested:
 | Check interval | 30 seconds, plus probe execution time |
 | Failed observations before action | 4 |
 | Successful observations to clear a failure streak | 3 |
-| Startup grace | 120 seconds; initial cooldown also applies |
+| Startup grace | 120 seconds; no action occurs before this expires |
 | Minimum cooldown between attempts | 180 seconds after the attempt |
 | Maximum recovery requests | 3 per physical modem per hour |
 | Power-off pulse / enumeration wait | 3 seconds / up to 60 seconds |
@@ -43,6 +43,8 @@ redial-first enabled, either condition bypasses soft retries when connectivity
 also fails. High error counters **alone** do not reset a working connection.
 Counters and cooldowns survive dialer/service restarts in RAM; reboots start a
 new grace period. Long outages can still be retried in later hourly windows.
+The cooldown is measured from a completed recovery request, so it cannot delay
+the first confirmed boot failure when no recovery action has occurred yet.
 
 Recovery stops and waits for only the selected procd instance, verifies fixed
 GPIO readback, waits for a newly enumerated interface, then explicitly starts
@@ -50,6 +52,13 @@ that slot. USB hotplug cannot start a competing instance during the operation.
 The peer and WAN priority are untouched. Recovery shares the adaptive 5G radio
 lock and is excluded during a live mode trial. An interrupted owned power-off
 pulse is restored; an unmarked manual power-off is not reversed.
+
+Each enabled QModem slot also has a persistent procd startup worker. It waits
+for that physical slot's exact USB path, single netdev and owned AT port before
+launching the dialer. If enumeration finishes after the initial service pass,
+the worker continues retrying rather than requiring a manual Dial click. A
+dialer exit respawns through the same readiness gate and cannot borrow the peer
+modem's netdev or serial port.
 
 The separate QModem monitor remains disabled so it cannot race the central
 watchdog. Later user recovery opt-outs survive upgrades and routing presets.

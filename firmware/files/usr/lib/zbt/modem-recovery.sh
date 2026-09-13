@@ -75,8 +75,9 @@ zbt_recovery_action() (
 		newindex=$(cat "${ZBT_SYSFS:-/sys}/class/net/$device/ifindex" 2>/dev/null)
 		if [ -n "$device" ] && { [ "$action" != power_cycle ] || [ "$newindex" != "$oldindex" ]; } &&
 			[ "$(uci -q get "qmodem.$section.state")" = enabled ]; then
-			# Release exclusion before explicit targeted start; ready() also
-			# verifies the newly enumerated USB path and AT port ownership.
+			# Release exclusion before explicit targeted start. The per-slot
+			# startup worker waits for the newly enumerated USB path, netdev and
+			# owned AT port without ever borrowing the peer modem.
 			rm -f "$path"
 			if /etc/init.d/qmodem_network dial "$section" >/dev/null 2>&1; then exit 0; fi
 			printf '%s\n' "$owner" > "$path"
@@ -136,7 +137,8 @@ zbt_recovery_check() {
 	# Every destructive request is bounded, serialized with radio changes,
 	# and gated on current direct failures, never on an old mwan3 status.
 	if [ "$ZBT_HEALTH" != online ] && [ "$fails" -ge "$threshold" ] &&
-		[ "$now" -ge "$grace" ] && [ $((now - last)) -ge "$cooldown" ] && [ "$cycles" -lt 3 ]; then
+		[ "$now" -ge "$grace" ] && { [ "$last" = 0 ] || [ $((now - last)) -ge "$cooldown" ]; } &&
+		[ "$cycles" -lt 3 ]; then
 		action=$(zbt_recovery_get "$key.action")
 		limit=$(zbt_recovery_uint "$(zbt_recovery_get "$key.redial_attempts")" 0 0 2)
 		if [ "$action" = power_cycle ] && [ "$attempts" -lt "$limit" ] && [ "$reason" = unreachable ]; then action=redial; fi

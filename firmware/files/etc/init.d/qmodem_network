@@ -4,34 +4,24 @@
 START=99
 STOP=13
 USE_PROCD=1
+. /usr/lib/zbt/dual-modem.sh
 extra_command "dial" "Start one modem"
 extra_command "hang" "Stop one modem"
 extra_command "redial" "Restart one modem"
 extra_command "modem_status" "Show one modem"
 
-ready() {
-	local section="$1" path port dev
-	# Block hotplug starts while this slot's recovery owner is still working.
-	if [ -f "/tmp/modem-watchdog/$section.recovering" ]; then
-		local owner
-		read -r owner < "/tmp/modem-watchdog/$section.recovering"
-		case "$owner" in ''|*[!0-9]*|0|1) ;; *) kill -0 "$owner" 2>/dev/null && return 1 ;; esac
-	fi
+armed() {
+	case "$1" in 4_1|2_1) ;; *) return 1 ;; esac
 	[ "$(uci -q get qmodem.main.enable_dial)" = 1 ] || return 1
-	[ "$(uci -q get "qmodem.$section.enable_dial")" = 1 ] || return 1
-	[ "$(uci -q get "qmodem.$section.state")" = enabled ] || return 1
-	. /usr/lib/zbt/dual-modem.sh
-	zbt_slot "$section" || return 1
-	path=$(uci -q get "qmodem.$section.path")
-	[ "$(readlink -f "$path")" = "$(readlink -f "/sys/bus/usb/devices/$ZBT_USB")" ] || return 1
-	dev=$(zbt_netdev "$section") || return 1
-	port=$(uci -q get "qmodem.$section.at_port")
-	[ -c "$port" ] && zbt_port_matches "$section" "$port"
+	[ "$(uci -q get "qmodem.$1.enable_dial")" = 1 ] || return 1
+	[ "$(uci -q get "qmodem.$1.state")" = enabled ]
 }
 add_modem() {
-	ready "$1" || return 0
+	# Register the enabled slot even when its USB netdev/AT port is late. The
+	# per-slot worker waits for its own exact hardware and then execs the dialer.
+	armed "$1" || return 0
 	procd_open_instance "modem_$1"
-	procd_set_param command /usr/share/qmodem/modem_dial.sh "$1" dial
+	procd_set_param command /usr/lib/zbt/qmodem-start.sh "$1"
 	procd_set_param env "ZBT_DIAL_CONFIG=$(zbt_dial_fingerprint "$1")"
 	# SIM reinsertion can follow a long outage. Keep a delayed retry alive;
 	# do not permanently abandon the slot after ten short failed attempts.
@@ -49,7 +39,7 @@ reload_service() {
 	start
 }
 dial() {
-	ready "$1" || return 1
+	armed "$1" || return 1
 	rc_procd add_modem "$1"
 }
 hang() {

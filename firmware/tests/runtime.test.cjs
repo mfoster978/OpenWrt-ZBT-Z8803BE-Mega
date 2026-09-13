@@ -267,9 +267,9 @@ test('QModem starts both instances without nested procd transactions; redial tar
   let svc = source('firmware/files/etc/init.d/qmodem_network').replace('mkdir -p /var/run/qmodem', ':');
   const mocks = `
 extra_command() { :; }
-ready() { return 0; }
+armed() { return 0; }
 procd_open_instance() { echo "open:$1"; }
-procd_set_param() { [ "$1" != command ] || echo "command:$3:$4"; }
+procd_set_param() { [ "$1" != command ] || echo "command:$2:$3"; }
 procd_close_instance() { :; }
 procd_kill() { echo "kill:$1:$2"; }
 rc_procd() { echo "transaction:$1:$2"; "$@"; }
@@ -279,8 +279,58 @@ rc_procd() { echo "transaction:$1:$2"; "$@"; }
   assert.equal(out.split('transaction:').length - 1, 1, 'only targeted dial opens its own transaction');
   assert.match(out, /open:modem_4_1/);
   assert.match(out, /open:modem_2_1/);
+  assert.match(out, /command:[^\n]*\/qmodem-start\.sh:4_1/);
+  assert.match(out, /command:[^\n]*\/qmodem-start\.sh:2_1/);
   assert.match(out, /kill:qmodem_network:modem_4_1/);
   assert.doesNotMatch(out, /kill:qmodem_network:modem_2_1/);
+});
+
+function qmodemStarter() {
+  return source('firmware/files/usr/lib/zbt/qmodem-start.sh')
+    .replace(/\nzbt_qmodem_start "\$@"\s*$/, '\n');
+}
+
+test('enabled Modem 1 waits for late USB enumeration and then dials without user action', () => {
+  const f = usbFixture();
+  fs.rmSync(path.join(f.sys, 'devices/4-1/4-1:1.4/net/wwan8'), { recursive: true });
+  const out = shell(qmodemStarter() + `
+uci() {
+  case "$3" in
+    qmodem.main.enable_dial|qmodem.4_1.enable_dial) echo 1 ;;
+    qmodem.4_1.state) echo enabled ;;
+    qmodem.4_1.path) echo "$ZBT_SYSFS/bus/usb/devices/4-1" ;;
+    qmodem.4_1.at_port) echo /dev/ttyUSB6 ;;
+  esac
+}
+zbt_qmodem_port_present() { return 0; }
+logger() { :; }
+sleep() {
+  echo wait
+  mkdir -p "$ZBT_SYSFS/devices/4-1/4-1:1.4/net/wwan8"
+}
+zbt_qmodem_launch() { echo "launch:$1"; }
+zbt_qmodem_start 4_1`, f.env);
+  assert.equal(out, 'wait\nlaunch:4_1');
+});
+
+test('boot readiness worker rejects the peer AT port and exits if its slot is disabled', () => {
+  const f = usbFixture(), stopped = path.join(f.dir, 'disabled');
+  const out = shell(qmodemStarter() + `
+uci() {
+  case "$3" in
+    qmodem.main.enable_dial) echo 1 ;;
+    qmodem.4_1.enable_dial) [ ! -f "$STOPPED" ] && echo 1 || echo 0 ;;
+    qmodem.4_1.state) echo enabled ;;
+    qmodem.4_1.path) echo "$ZBT_SYSFS/bus/usb/devices/4-1" ;;
+    qmodem.4_1.at_port) echo /dev/ttyUSB2 ;;
+  esac
+}
+zbt_qmodem_port_present() { return 0; }
+logger() { :; }
+sleep() { echo wait; touch "$STOPPED"; }
+zbt_qmodem_launch() { echo "wrong-launch:$1"; }
+zbt_qmodem_start 4_1`, { ...f.env, STOPPED: stopped });
+  assert.equal(out, 'wait');
 });
 
 test('QModem stopped instance uses the marker expected by upstream RPC', () => {

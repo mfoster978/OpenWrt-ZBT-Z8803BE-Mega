@@ -84,6 +84,12 @@ test('four failed probes trigger only selected GPIO, then explicitly dial; coold
   assert.doesNotMatch(f.calls,/service (?:redial|.*2_1)/);
   assert.equal(fs.readFileSync(path.join(f.d,'sys/class/gpio/5g1/value'),'utf8').trim(),'1');
 });
+test('first confirmed boot outage uses boot grace without an extra action cooldown',()=>{
+  const f=fixture('echo 0 > "$DB/clock"; cycle; cycle; cycle; cycle; grep -q "service " "$DB/calls" && echo premature || :; cycle');
+  assert.equal(f.out,'');
+  assert.equal((f.calls.match(/service hang 4_1/g)||[]).length,1);
+  assert.match(f.calls,/requesting power_cycle[\s\S]*service hang 4_1/);
+});
 test('IPv6-only and dual-stack partial success prevent GPIO recovery',()=>{
   for(const ADDR4 of ['0','1']) {
     const f=fixture('cycle; cycle; cycle; cycle; cycle',{ADDR4,ADDR6:'1',GOOD_FAMILY:'-6',GOOD_DEVICE:'wwan8'});
