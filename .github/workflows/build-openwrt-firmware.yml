@@ -215,7 +215,7 @@ jobs:
           } > "$evidence"
           echo "evidence=$evidence" >> "$GITHUB_OUTPUT"
 
-      - name: Generate detailed Gemini release notes
+      - name: Generate detailed release notes
         if: ${{ success() && steps.openwrt_build.outcome == 'success' }}
         id: notes
         env:
@@ -224,8 +224,30 @@ jobs:
         run: |
           ai_notes="$RUNNER_TEMP/ai-notes.md"
           final_notes="$RUNNER_TEMP/release-notes.md"
-          python3 .github/scripts/generate_firmware_release_notes.py \
-            --name 'OpenWrt Mega Edition' --evidence "$EVIDENCE" --output "$ai_notes"
+          if ! python3 .github/scripts/generate_firmware_release_notes.py \
+            --name 'OpenWrt Mega Edition' --evidence "$EVIDENCE" --output "$ai_notes"; then
+            # Release-note prose is not a firmware build result. If the external
+            # model is unavailable or returns invalid structured output, publish
+            # conservative notes instead of turning a validated image red.
+            cat > "$ai_notes" <<'EOF'
+          ## Highlights
+
+          - The OpenWrt Mega Edition firmware, package manifest, image metadata, and checksums completed the workflow's build-time validation. This status confirms that the downloadable files were assembled consistently; physical-router behavior still requires post-flash testing.
+
+          ## Bug fixes
+
+          - Automated release-note generation did not return a response that passed the repository's strict structure and evidence checks. The workflow therefore used this conservative fallback and did not infer or advertise source-level fixes that were not safely summarized.
+
+          ## Features and additions
+
+          - The release retains the Mega Edition package selection and the files documented by the repository at the tagged source revision. Review the commit history and changed-file list for the authoritative implementation details when generated prose is unavailable.
+
+          ## Upgrade notes
+
+          - Back up the current router configuration, verify the downloaded file against SHA256SUMS, and keep a recovery method available before flashing.
+          - After upgrading, verify boot, Ethernet, Wi-Fi, both cellular modems, MultiWAN priority and failover, modem recovery, and any carrier-specific settings on the physical router. A successful hosted compile is not hardware certification.
+          EOF
+          fi
           {
             printf '<!-- source-sha: %s -->\n\n' "$GITHUB_SHA"
             cat "$ai_notes"

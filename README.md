@@ -18,7 +18,7 @@
 
 <p align="center">
   <a href="https://github.com/mfoster978/OpenWrt-ZBT-Z8803BE-Mega/releases/latest"><img alt="Latest published Mega release" src="https://img.shields.io/github/v/release/mfoster978/OpenWrt-ZBT-Z8803BE-Mega?label=Mega%20release"></a>
-  <a href="https://github.com/mfoster978/OpenWrt-ZBT-Z8803BE-Mega/actions/workflows/publish-local-release.yml?query=branch%3Amaster"><img alt="Local firmware validation and publication" src="https://github.com/mfoster978/OpenWrt-ZBT-Z8803BE-Mega/actions/workflows/publish-local-release.yml/badge.svg?branch=master&amp;event=workflow_dispatch"></a>
+  <a href="https://github.com/mfoster978/OpenWrt-ZBT-Z8803BE-Mega/actions/workflows/publish-local-release.yml?query=branch%3Amaster"><img alt="Local firmware validation and publication" src="https://github.com/mfoster978/OpenWrt-ZBT-Z8803BE-Mega/actions/workflows/publish-local-release.yml/badge.svg?branch=master&amp;event=workflow_dispatch&amp;badge_revision=2"></a>
   <a href="https://github.com/mfoster978/OpenWrt-ZBT-Z8803BE-Mega/actions/workflows/sanity.yml?query=branch%3Amaster"><img alt="Source checks (not firmware compilation)" src="https://github.com/mfoster978/OpenWrt-ZBT-Z8803BE-Mega/actions/workflows/sanity.yml/badge.svg?branch=master&amp;event=push"></a>
   <img alt="OpenWrt 25.12.2" src="https://img.shields.io/badge/OpenWrt-25.12.2-00B5E2?logo=openwrt&logoColor=white">
   <img alt="Linux 6.12.74" src="https://img.shields.io/badge/Linux-6.12.74-FCC624?logo=linux&logoColor=black">
@@ -87,7 +87,7 @@ Mega Edition combines a wide selection of add-on packages with custom-developed 
 |---|---|
 | Core networking and normal `mwan3` failover | Active; faster wired-first priority failover is the starting point. |
 | Modem 1 and Modem 2 | Enabled initially in Mega; later per-slot power, dialing and SIM choices are preserved. |
-| Extra watchdog and automated recovery actions | Off until explicitly enabled and configured. |
+| Guarded modem watchdog and automated recovery | On for both modem slots; confirmed sustained outages use slot-specific GPIO power cycling. The separate QModem monitor remains off. |
 | Modem 1 / Modem 2 routing | Modem 1 is always primary; Modem 2 is health-checked failover only. |
 | Live Speed Test Utility | Runs only when you start a test; it does not automatically consume cellular data in the background. |
 | Speedify | Dependencies are baked in and its first-online installer is enabled. Bonding still requires your own account and setup; no credentials are preconfigured. |
@@ -406,7 +406,7 @@ A clean Mega installation has no shared `admin` password. Open `http://192.168.1
 - Wi-Fi defaults to the US regulatory domain on 2.4, 5 and 6 GHz. Transmit power remains automatic so the driver honors the lower of the US limit and the board's calibrated EEPROM limit. The mobile-compatible 6 GHz profile is capped to the FCC very-low-power class (14 dBm EIRP), not indoor 30 dBm or standard-power/AFC operation; use only compliant hardware and antennas.
 - Confirm both installed modems appear under QModem and match sections `4_1` and `2_1`.
 - Configure APN, PIN, PDP, and carrier-specific settings for each modem.
-- Confirm `wan`, `wan_sfp`, `4_1`, and `2_1` status in LuCI before enabling automated recovery.
+- Confirm `wan`, `wan_sfp`, `4_1`, and `2_1` status in LuCI and review the enabled per-modem recovery defaults.
 - Test wired-to-cellular failover and restoration during an attended maintenance window.
 - Confirm per-modem IPv4/IPv6 probes and GPIO recovery settings; disable automatic recovery if your network blocks the configured ping targets.
 - Check `logread -e speedify-installer` if Speedify is wanted; otherwise disable its installer service.
