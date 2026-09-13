@@ -8,7 +8,7 @@ exec 7>"$ZBT_RECOVERY_DIR/worker.lock"
 flock -n 7 || exit 0
 trap 'exit 0' INT TERM
 while :; do
-	interval=$(zbt_recovery_uint "$(zbt_recovery_get global.interval_seconds)" 30 10 60)
+	interval=$(zbt_recovery_uint "$(zbt_recovery_get global.interval_seconds)" 20 10 60)
 	for section in 4_1 2_1; do
 		zbt_recovery_resume "$section"
 		zbt_health_probe "$section" || true

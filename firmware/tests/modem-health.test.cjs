@@ -20,7 +20,8 @@ function fixture(body, options={}) {
     write(`uci/qmodem.${slot}.enable_dial`,1); write(`uci/qmodem.${slot}.state`,'enabled');
   }
   for (const [k,v] of Object.entries({'qmodem.main.enable_dial':1,'modem_watchdog.global.enabled':1,'modem_watchdog.global.actions_enabled':1,
-    'modem_watchdog.modem1.enabled':1,'modem_watchdog.modem2.enabled':1,'modem_watchdog.modem1.action':'power_cycle','modem_watchdog.modem2.action':'power_cycle'})) write('uci/'+k,v);
+    'modem_watchdog.modem1.enabled':1,'modem_watchdog.modem2.enabled':1,'modem_watchdog.modem1.action':'power_cycle','modem_watchdog.modem2.action':'power_cycle',
+    'modem_watchdog.modem1.redial_attempts':1,'modem_watchdog.modem2.redial_attempts':1,'modem_watchdog.global.redial_verify_seconds':60})) write('uci/'+k,v);
   write('clock',300); fs.mkdirSync(path.join(d,'recovery'));
   const mocks = `
 uci() { [ "$1" != -q ] || shift; [ "$1" = get ] && cat "$DB/uci/$2" 2>/dev/null; }
@@ -77,18 +78,18 @@ echo 17 > "$DB/sys/class/net/wwan8/ifindex"; echo $$ > "$DB/recovery/4_1.recover
 rm "$DB/recovery/4_1.recovering"; echo 0 > "$DB/uci/qmodem.4_1.enable_dial"; zbt_health_online 4_1 || echo disabled`,{GOOD_DEVICE:'wwan8'});
   assert.equal(f.out,'fresh\nstale\nreplaced\nrecovering\ndisabled\n');
 });
-test('four failed probes trigger only selected GPIO, then explicitly dial; cooldown prevents storms',()=>{
-  const f=fixture('cycle; cycle; cycle; cycle; cycle; cycle');
+test('three failed probes trigger only selected GPIO, then explicitly dial; cooldown prevents storms',()=>{
+  const f=fixture('echo 0 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; cycle; cycle; cycle; cycle; cycle; cycle');
   assert.equal((f.calls.match(/service hang 4_1/g)||[]).length,1);
   assert.match(f.calls,/service hang 4_1\nsleep 3 power=0\/1\nservice dial 4_1/);
   assert.doesNotMatch(f.calls,/service (?:redial|.*2_1)/);
   assert.equal(fs.readFileSync(path.join(f.d,'sys/class/gpio/5g1/value'),'utf8').trim(),'1');
 });
 test('first confirmed boot outage uses boot grace without an extra action cooldown',()=>{
-  const f=fixture('echo 0 > "$DB/clock"; cycle; cycle; cycle; cycle; grep -q "service " "$DB/calls" && echo premature || :; cycle');
+  const f=fixture('echo 0 > "$DB/clock"; cycle; cycle; grep -q "service " "$DB/calls" && echo premature || :; cycle');
   assert.equal(f.out,'');
   assert.equal((f.calls.match(/service hang 4_1/g)||[]).length,1);
-  assert.match(f.calls,/requesting power_cycle[\s\S]*service hang 4_1/);
+  assert.match(f.calls,/requesting redial[\s\S]*service hang 4_1/);
 });
 test('IPv6-only and dual-stack partial success prevent GPIO recovery',()=>{
   for(const ADDR4 of ['0','1']) {
@@ -97,7 +98,7 @@ test('IPv6-only and dual-stack partial success prevent GPIO recovery',()=>{
   }
 });
 test('Modem 2 GPIO recovery leaves Modem 1 alone and explicitly starts Modem 2',()=>{
-  const f=fixture('for n in 1 2 3 4; do zbt_health_probe 2_1 || :; zbt_recovery_check 2_1 modem2; done');
+  const f=fixture('echo 0 > "$DB/uci/modem_watchdog.modem2.redial_attempts"; for n in 1 2 3 4; do zbt_health_probe 2_1 || :; zbt_recovery_check 2_1 modem2; done');
   assert.match(f.calls,/service hang 2_1\nsleep 3 power=1\/0\nservice dial 2_1/);
   assert.doesNotMatch(f.calls,/service .*4_1/);
 });
@@ -114,30 +115,30 @@ test('busy peer recovery consumes no slot attempt or cooldown',()=>{
   assert.doesNotMatch(f.calls,/service /);
   assert.match(f.out,/^4 0 0 0 /);
 });
-test('confirmed QMI process loss bypasses optional soft retries',()=>{
-  const f=fixture('echo 2 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; touch "$DB/recovery/4_1.qmi-lost"; cycle; cycle; cycle; cycle');
-  assert.match(f.calls,/qmi_session_lost; requesting power_cycle/);
-  assert.doesNotMatch(f.calls,/requesting redial/);
+test('confirmed QMI process loss receives the configured soft redial first',()=>{
+  const f=fixture('echo 1 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; touch "$DB/recovery/4_1.qmi-lost"; cycle; cycle; cycle');
+  assert.match(f.calls,/qmi_session_lost; requesting redial/);
+  assert.doesNotMatch(f.calls,/requesting power_cycle/);
 });
 test('disabled modem and disabled recovery are read-only; missing GPIO never hangs a modem',()=>{
   for(const key of ['qmodem.4_1.enable_dial','qmodem.main.enable_dial','modem_watchdog.global.enabled','modem_watchdog.modem1.enabled']) {
     const f=fixture(`echo 0 > "$DB/uci/${key}"; cycle; cycle; cycle; cycle`);
     assert.doesNotMatch(f.calls,/service /,key);
   }
-  const f=fixture('rm "$DB/sys/class/gpio/5g1/value"; cycle; cycle; cycle; cycle');
+  const f=fixture('echo 0 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; rm "$DB/sys/class/gpio/5g1/value"; cycle; cycle; cycle; cycle');
   assert.doesNotMatch(f.calls,/service /);
 });
 test('bounded redial-first option escalates to GPIO; growing RX errors bypass soft retry',()=>{
-  const f=fixture('echo 1 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; cycle; cycle; cycle; cycle; echo 700 > "$DB/clock"; cycle; cycle; cycle; cycle');
+  const f=fixture('echo 1 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; cycle; cycle; cycle; echo 700 > "$DB/clock"; cycle; cycle; cycle');
   assert.match(f.calls,/requesting redial[\s\S]*requesting power_cycle/);
-  const bad=fixture('echo 2 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; cycle; cycle; cycle; echo 300 > "$DB/sys/class/net/wwan8/statistics/rx_errors"; cycle');
+  const bad=fixture('echo 2 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; cycle; cycle; echo 300 > "$DB/sys/class/net/wwan8/statistics/rx_errors"; cycle');
   assert.match(bad.calls,/rx_errors_growing; requesting power_cycle/);
   assert.doesNotMatch(bad.calls,/requesting redial/);
 });
 test('three consecutive successes clear failure streak, not a single stray success',()=>{
   const f=fixture('cycle; cycle; cycle; GOOD_DEVICE=wwan8; cycle; GOOD_DEVICE=""; cycle');
-  assert.match(f.calls,/requesting power_cycle/);
-  const recovered=fixture('cycle; cycle; cycle; GOOD_DEVICE=wwan8; cycle; cycle; cycle; GOOD_DEVICE=""; cycle');
+  assert.match(f.calls,/requesting redial/);
+  const recovered=fixture('cycle; cycle; GOOD_DEVICE=wwan8; cycle; cycle; cycle; GOOD_DEVICE=""; cycle');
   assert.doesNotMatch(recovered.calls,/service /);
 });
 test('adaptive radio lock excludes GPIO recovery and does not consume attempt budget',()=>{

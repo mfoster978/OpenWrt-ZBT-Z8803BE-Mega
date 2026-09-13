@@ -18,14 +18,14 @@ Firmware update controls are **not part of About**; their separate side-menu
 entry is **System → Firmware Update**.
 
 Mega Edition combines add-on packages and custom-built tools into a configurable
-networking workhorse. Optional watchdog recovery is off by default; essential
-networking and Modem-1-first failover remain active. Users choose which optional tools to enable. Speedify's
+networking workhorse. The guarded central modem watchdog and Modem-1-first
+failover are active by default; the separate QModem monitor remains off. Users choose which optional tools to enable. Speedify's
 first-online installer is enabled, but account setup and bonding are separate
 user choices. See the main README's default-behavior table for the distinction.
 
 The guide distinguishes included software from account setup and optional
 features. Speedify bonding is not the same as mwan3 failover/load balancing.
-The About page does not sign in, run tests, enable watchdogs, or change modems.
+The About page itself does not sign in, run tests, or change modem settings.
 
 ## System → Firmware Update
 

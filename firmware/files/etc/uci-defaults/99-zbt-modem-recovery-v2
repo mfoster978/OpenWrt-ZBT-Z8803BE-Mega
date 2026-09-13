@@ -1,0 +1,26 @@
+#!/bin/sh
+# Move only the previous firmware-managed recovery defaults to the faster
+# redial-then-GPIO policy.  Custom actions and disabled watchdog choices stay
+# untouched; the version marker makes kept-configuration upgrades idempotent.
+[ "$(uci -q get modem_watchdog.global.recovery_v2 2>/dev/null)" = 1 ] && exit 0
+
+[ "$(uci -q get modem_watchdog.global.interval_seconds 2>/dev/null)" != 30 ] ||
+	uci set modem_watchdog.global.interval_seconds=20
+[ "$(uci -q get modem_watchdog.global.ping_fail_threshold 2>/dev/null)" != 4 ] ||
+	uci set modem_watchdog.global.ping_fail_threshold=3
+[ "$(uci -q get modem_watchdog.global.boot_grace_seconds 2>/dev/null)" != 120 ] ||
+	uci set modem_watchdog.global.boot_grace_seconds=60
+[ -n "$(uci -q get modem_watchdog.global.redial_verify_seconds 2>/dev/null)" ] ||
+	uci set modem_watchdog.global.redial_verify_seconds=60
+
+for key in modem1 modem2; do
+	[ "$(uci -q get modem_watchdog.$key.action 2>/dev/null)" = power_cycle ] || continue
+	case "$(uci -q get modem_watchdog.$key.redial_attempts 2>/dev/null)" in
+		''|0) uci set "modem_watchdog.$key.redial_attempts=1" ;;
+	esac
+done
+
+uci set modem_watchdog.global.recovery_v2=1
+uci commit modem_watchdog
+/etc/init.d/modem_watchdog enable
+exit 0

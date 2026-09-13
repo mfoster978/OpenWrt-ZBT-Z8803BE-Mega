@@ -1,6 +1,8 @@
 #!/bin/sh
-# Wait for one enabled physical modem to finish USB enumeration, then replace
-# this process with its QModem dialer. procd supervises one copy per slot.
+# Wait for one enabled physical modem to finish USB enumeration, then supervise
+# its QModem dialer.  The wrapper deliberately remains alive: a QMI process can
+# lose its USB control channel without the modem disappearing, and relying only
+# on an outer procd respawn left that slot idle on affected dual-modem boots.
 # Never fall back to the peer modem and never rewrite modem/network settings.
 
 . /usr/lib/zbt/dual-modem.sh
@@ -39,20 +41,94 @@ zbt_qmodem_ready() {
 	zbt_port_matches "$section" "$port"
 }
 
+zbt_qmodem_child_alive() {
+	[ -n "$zbt_qmodem_child" ] || return 1
+	awk -v parent="$$" '
+		/^State:/ { zombie=($2 == "Z") }
+		/^PPid:/ { owned=($2 == parent) }
+		END { exit !(owned && !zombie) }
+	' "/proc/$zbt_qmodem_child/status" 2>/dev/null
+}
+
+zbt_qmodem_stop() {
+	zbt_qmodem_stopping=1
+	zbt_qmodem_child_alive && kill -TERM "$zbt_qmodem_child" 2>/dev/null
+}
+
+zbt_qmodem_address_ready() {
+	local device
+	device=$(zbt_netdev "$1") || return 1
+	ip -o -4 addr show dev "$device" scope global 2>/dev/null | grep -q ' inet ' && return 0
+	ip -o -6 addr show dev "$device" scope global 2>/dev/null | grep -q ' inet6 '
+}
+
+zbt_qmodem_launch_lock() {
+	# QModem's set_if phase can reload netifd while importing a newly discovered
+	# interface.  Serialize only initial session establishment, then release the
+	# lock after this exact slot has held an address for ten seconds.  The other
+	# modem is delayed for at most 60 seconds, not for the connection lifetime.
+	local waited=0
+	exec 8>/var/lock/zbt-qmodem-session-start.lock
+	while ! flock -n 8; do
+		[ "$zbt_qmodem_stopping" = 0 ] || { exec 8>&-; return 1; }
+		[ "$waited" -lt 60 ] || { exec 8>&-; return 1; }
+		sleep 1
+		waited=$((waited + 1))
+	done
+}
+
 zbt_qmodem_launch() {
-	exec /usr/share/qmodem/modem_dial.sh "$1" dial
+	local section="$1" waited=0 stable=0 result
+	zbt_qmodem_launch_lock || return 75
+	(
+		exec 8>&-
+		exec /usr/share/qmodem/modem_dial.sh "$section" dial
+	) &
+	zbt_qmodem_child=$!
+	# Do not let the peer's first set_if/CM startup overlap this one.  A missing
+	# SIM or carrier still releases the peer after one bounded minute.
+	while zbt_qmodem_child_alive && [ "$waited" -lt 60 ]; do
+		[ "$zbt_qmodem_stopping" = 0 ] || break
+		if zbt_qmodem_address_ready "$section"; then
+			stable=$((stable + 2))
+			[ "$stable" -lt 10 ] || break
+		else
+			stable=0
+		fi
+		sleep 2
+		waited=$((waited + 2))
+	done
+	flock -u 8
+	exec 8>&-
+	wait "$zbt_qmodem_child"
+	result=$?
+	zbt_qmodem_child=''
+	return "$result"
 }
 
 zbt_qmodem_start() {
-	local section="$1" attempts=0 delay=2 reason last_reason=''
+	local section="$1" attempts=0 dial_attempts=0 delay=2 reason last_reason='' result
 	case "$section" in 4_1|2_1) ;; *) return 2 ;; esac
+	zbt_qmodem_child=''
+	zbt_qmodem_stopping=0
+	trap 'zbt_qmodem_stop' INT TERM
+	# Give the primary worker the first opportunity to own the short startup
+	# lock even if procd happens to schedule the second instance first.
+	if [ "$section" = 2_1 ] && zbt_qmodem_armed 4_1 && zbt_qmodem_ready 4_1; then sleep 2; fi
 	while zbt_qmodem_armed "$section"; do
+		[ "$zbt_qmodem_stopping" = 0 ] || break
 		if zbt_qmodem_recovery_busy "$section"; then
 			reason=recovery-in-progress
 		elif zbt_qmodem_ready "$section"; then
-			logger -t qmodem_network "slot=$section action=auto-dial readiness=ready attempts=$attempts"
-			zbt_qmodem_launch "$section"
-			return $?
+			dial_attempts=$((dial_attempts + 1))
+			logger -t qmodem_network "slot=$section action=auto-dial readiness=ready dial_attempt=$dial_attempts"
+			result=0
+			zbt_qmodem_launch "$section" || result=$?
+			[ "$zbt_qmodem_stopping" = 0 ] || break
+			logger -t qmodem_network "slot=$section action=dialer-exited result=$result retry_seconds=5 dial_attempt=$dial_attempts"
+			zbt_qmodem_armed "$section" || break
+			reason=dialer-exited
+			delay=5
 		else
 			reason=waiting-for-own-usb-netdev-and-at-port
 		fi
@@ -64,7 +140,8 @@ zbt_qmodem_start() {
 		attempts=$((attempts + 1))
 		[ "$attempts" -lt 30 ] || delay=5
 	done
-	logger -t qmodem_network "slot=$section action=auto-dial readiness=disarmed attempts=$attempts"
+	trap - INT TERM
+	logger -t qmodem_network "slot=$section action=auto-dial readiness=stopped attempts=$attempts dial_attempts=$dial_attempts"
 	return 0
 }
 

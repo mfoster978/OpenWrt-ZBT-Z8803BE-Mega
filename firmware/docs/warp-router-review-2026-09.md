@@ -52,15 +52,14 @@ immediately restarted failed children. The final experiment handed retry to proc
 the router became unreachable before verification completed. This is not
 treated as a successful live acceptance test.
 
-Mega uses fresh results of the existing enabled MultiWAN trackers instead of
-adding an independent ping policy. A data session with no global address in
-either family, or continuously failed configured trackers, gets 120 seconds
-before its child is stopped and cleaned. Paused/stale trackers are unknown;
-an IPv6-only session is not failed just for lacking IPv4. Untracked address
-families do not override the owner's enabled tracker policy. Bridge passthrough
-is excluded from WAN-address supervision. This is data-session supervision,
-not enabling optional QModem recovery/reset monitors. MultiWAN priorities and
-metrics remain unchanged; no band mask, carrier MTU or modem reset is forced.
+Mega now uses direct, physical-interface-bound IPv4/IPv6 health checks for its
+central watchdog while MultiWAN independently owns routing priority. An exited
+dialer is relaunched by its persistent per-slot worker. A sustained outage tries
+one targeted redial and then the selected slot's GPIO; the peer is untouched.
+Paused/stale trackers are not treated as proof of physical failure, and an
+IPv6-only working session is not failed merely for lacking IPv4. Bridge
+passthrough is excluded from router-address supervision. No band mask, carrier
+MTU or routing priority is changed by recovery.
 
 The cached build also now removes exact duplicate copies of its known mwan3
 hook before applying it once, while refusing unrelated source changes.

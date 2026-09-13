@@ -87,7 +87,7 @@ Mega Edition combines a wide selection of add-on packages with custom-developed 
 |---|---|
 | Core networking and normal `mwan3` failover | Active; faster wired-first priority failover is the starting point. |
 | Modem 1 and Modem 2 | Enabled initially in Mega; later per-slot power, dialing and SIM choices are preserved. |
-| Guarded modem watchdog and automated recovery | On for both modem slots; confirmed sustained outages use slot-specific GPIO power cycling. The separate QModem monitor remains off. |
+| Guarded modem watchdog and automated recovery | On for both modem slots; confirmed sustained outages try one targeted redial, then use slot-specific GPIO power cycling if Internet remains down. The separate QModem monitor remains off. |
 | Modem 1 / Modem 2 routing | Modem 1 is always primary; Modem 2 is health-checked failover only. |
 | Live Speed Test Utility | Runs only when you start a test; it does not automatically consume cellular data in the background. |
 | Speedify | Dependencies are baked in and its first-online installer is enabled. Bonding still requires your own account and setup; no credentials are preconfigured. |
@@ -129,7 +129,7 @@ Installed does not mean every feature is actively controlling traffic. Keep unus
 - Both modem power rails are seeded on during initial setup; later operator power choices are preserved.
 - QMI/MBIM paths using `quectel-CM-M -d` use `proto=none`: the connection manager owns addresses and routes, with no competing DHCP client. ECM/RNDIS retain their protocol-specific behavior.
 - QMI publishes its actual addresses/routes to netifd before refreshing each modem tracker. A live session is no longer torn down by a stale mwan3-offline timer. Direct per-interface IPv4/IPv6 probes drive guarded GPIO recovery, independently of radio registration.
-- Both USB modems use the same startup, APN, protocol, and recovery logic. Each enabled slot gets a supervised boot worker before hardware readiness is assumed; a modem whose USB net device or own AT port enumerates late is dialed automatically instead of being abandoned until the Dial button is pressed. The worker cannot substitute the peer modem. The connection manager applies the MTU reported for each data connection, rather than copying one carrier's value to everyone.
+- Both USB modems use the same startup, APN, protocol, and recovery logic. Each enabled slot gets a persistent supervised worker before hardware readiness is assumed; a modem whose dial process exits or whose USB net device/own AT port enumerates late is dialed again automatically instead of being abandoned until the Dial button is pressed. Initial session establishment is briefly serialized so the backup cannot overlap the primary's netifd/QMI setup. The worker cannot substitute the peer modem. The connection manager applies the MTU reported for each data connection, rather than copying one carrier's value to everyone.
 - Blank/auto QMI APNs retain modem/network profile negotiation. A directly identified AT&T US `310/410` SIM gets the data-device fallback `broadband`; every manual APN still wins. Both SIM selectors also offer editable presets for AT&T, FirstNet, T-Mobile, Verizon, Google Fi, and U.S. Cellular.
 - SIM information reads the subscriber number from the full `AT+CNUM` response and falls back to the SIM's standard Own Numbers (`ON` / EF-MSISDN) phonebook. It says explicitly when neither store is provisioned; the modem cannot reconstruct an unrecorded number from ICCID or IMSI.
 - QModem's nearby-cell button runs Quectel's full LTE/5G `AT+QSCAN=3,1` with its documented network-dependent timeout instead of treating a three-second timeout as an empty result. It falls back to `AT+QENG="neighbourcell"` and always includes the registered serving cell when available.
@@ -147,7 +147,7 @@ Installed does not mean every feature is actively controlling traffic. Keep unus
 - **Network → MultiWAN Manager → Priority & Recovery** offers one-click normal or fast health failover plus per-modem recovery controls. Both presets keep Modem 1 ahead of Modem 2.
 - The MultiWAN Interfaces tab owns the persistent route metric for every tracked link. QModem displays the cellular value read-only and cannot erase or override it during redial.
 - Priority failover is enabled by default: SFP, copper WAN, USB tether, Modem 1, then Modem 2. MultiWAN owns this order. On verified failback, lower-priority NATed IPv4 LAN connections are expired so wired and Wi-Fi clients reconnect through the preferred WAN. Router/VPN-marked connections are preserved; custom policy routing disables this selective expiration. Modem devices are detected dynamically, never hard-coded to `wwan0`/`wwan1`.
-- Both modems default to guarded GPIO power-cycle recovery, with cooldowns and three recovery requests per modem per hour. The first confirmed boot outage is governed by the boot grace and failure threshold without incorrectly applying an action cooldown before any action has occurred; subsequent actions retain the full cooldown. 5G LEDs reflect verified Internet access. IPv6 has a separate failover policy and default WAN NAT66; Wi-Fi and Ethernet share the same LAN policy. See [health, recovery and IPv6 details](firmware/docs/modem-health-recovery.md).
+- Both modems default to one targeted redial followed by guarded GPIO power-cycle recovery if direct Internet is still unavailable after 60 seconds, with cooldowns and three recovery requests per modem per hour. The first confirmed boot outage is governed by the boot grace and failure threshold without incorrectly applying an action cooldown before any action has occurred. 5G LEDs reflect verified Internet access. IPv6 has a separate failover policy and default WAN NAT66; Wi-Fi and Ethernet share the same LAN policy. See [health, recovery and IPv6 details](firmware/docs/modem-health-recovery.md).
 - Recovery choices include log-only, disconnect, redial, or GPIO power-cycle followed by redial.
 - Cooldowns and failure thresholds prevent rapid recovery loops.
 - QModem supervises each physical modem separately. The old configuration-rewriting watchdog, shared restart hooks, and post-flash automatic modem reset have been retired.
@@ -263,12 +263,14 @@ The safe defaults are:
 | Setting | Default |
 |---|---:|
 | Watchdog recovery | On |
-| Recovery actions | GPIO power-cycle + targeted dial |
-| Check interval | 30 seconds |
-| Ping failures before action | 4 |
+| Recovery actions | One targeted redial; GPIO power-cycle + dial if still offline |
+| Check interval | 20 seconds |
+| Ping failures before action | 3 |
+| Startup grace | 60 seconds |
+| Soft-redial verification | 60 seconds |
 | Recovery cooldown | 180 seconds |
 | Recovery limit | 3 attempts per modem per hour |
-| Optional redial-first attempts | 0 (user-selectable 1 or 2) |
+| Redial-first attempts | 1 (user-selectable 0 or 2) |
 
 Defaults migrate once, including kept configurations. Later user opt-outs are preserved. Working IPv4 **or** IPv6 prevents a whole-modem reset; three good observations clear a failure streak. Health collection continues for LEDs with recovery off. Read the [recovery safeguards and target requirements](firmware/docs/modem-health-recovery.md) and use `zbt-mwan-diagnostics` to inspect shared Wi-Fi/Ethernet routing.
 

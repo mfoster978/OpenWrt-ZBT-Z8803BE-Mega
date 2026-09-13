@@ -74,6 +74,7 @@ function round(options = {}) {
   const mock = `
 config_section=4_1; zbt_5g_dir="$DB"; adaptive_device=wwan8
 zbt_adaptive_enabled() { [ "$MANUAL" != 1 ]; }
+zbt_adaptive_recovery_stable() { [ "$UNSTABLE" != 1 ]; }
 zbt_mwan_online() { [ "$OFFLINE" != 1 ]; }
 zbt_adaptive_probe() { :; }
 zbt_adaptive_serving() { echo "\${BASE_MODE:-sa} -90 16"; }
@@ -132,7 +133,7 @@ test('losing the backup before a mode change prevents applying the candidate',()
   assert.match(f.calls,/apply auto\nverify any\nresume/);
 });
 test('readiness failure does not install the failed-trial cooldown',()=>{
-  for(const env of [{OFFLINE:'1'},{BUSY:'1'},{UNSUPPORTED:'1'}]) {
+  for(const env of [{OFFLINE:'1'},{UNSTABLE:'1'},{BUSY:'1'},{UNSUPPORTED:'1'}]) {
     const f=round(env);
     assert.equal(fs.existsSync(path.join(f.dir,'attempt')),false);
   }
@@ -169,8 +170,8 @@ test('failed write, missing 5G registration, failed sample or insufficient impro
     assert.equal(fs.existsSync(path.join(f.dir, 'rollback')), false);
   }
 });
-test('manual policy, no Internet, unreadable capabilities, busy traffic, quota and bad baseline never write radio settings', () => {
-  for (const env of [{ MANUAL: '1' }, { OFFLINE: '1' }, { UNSUPPORTED: '1' }, { BUSY: '1' }, { BUDGET: '0' }, { BAD_BASE: '1' }]) {
+test('manual policy, unstable/no Internet, unreadable capabilities, busy traffic, quota and bad baseline never write radio settings', () => {
+  for (const env of [{ MANUAL: '1' }, { OFFLINE: '1' }, { UNSTABLE: '1' }, { UNSUPPORTED: '1' }, { BUSY: '1' }, { BUDGET: '0' }, { BAD_BASE: '1' }]) {
     const f = round(env); assert.doesNotMatch(f.calls, /apply|tracker/);
   }
 });

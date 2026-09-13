@@ -62,6 +62,18 @@ zbt_adaptive_probe() {
 		-o /dev/null -w '%{http_code}' https://www.gstatic.com/generate_204 2>/dev/null) || return 1
 	[ "$code" = 204 ]
 }
+zbt_adaptive_recovery_stable() {
+	# Never begin a radio-mode comparison immediately after a dial/QMI failure.
+	# The central watchdog records consecutive direct-health successes in RAM;
+	# require roughly two quiet minutes at the default interval before touching
+	# SA/NSA.  Missing/corrupt recovery state fails closed and changes nothing.
+	local fails good last attempts window cycles oldrx oldindex
+	[ ! -f "/tmp/modem-watchdog/$config_section.qmi-lost" ] || return 1
+	[ ! -f "/tmp/modem-watchdog/$config_section.recovering" ] || return 1
+	read -r fails good last attempts window cycles oldrx oldindex 2>/dev/null < "/tmp/modem-watchdog/$config_section.state" || return 1
+	case "$fails:$good" in *[!0-9:]*|:*|*:) return 1 ;; esac
+	[ "$fails" = 0 ] && [ "$good" -ge 6 ]
+}
 zbt_adaptive_exec() {
 	# Set MWAN3's bypass socket mark as well as binding the physical device.
 	# A custom OUTPUT policy must not send a trial over the backup modem.
@@ -234,8 +246,8 @@ zbt_adaptive_round() {
 	local serving baseline_mode candidate baseline_max candidate_min scores previous
 	adaptive_ipv6=0
 	if ip -o -6 addr show dev "$adaptive_device" scope global 2>/dev/null | grep -q ' inet6 '; then adaptive_ipv6=1; fi
-	zbt_adaptive_enabled && zbt_mwan_online "$config_section" && zbt_adaptive_probe || {
-		zbt_adaptive_status 'Waiting for this modem to have verified IPv4 Internet and an online MultiWAN tracker.'; return 1;
+	zbt_adaptive_enabled && zbt_adaptive_recovery_stable && zbt_mwan_online "$config_section" && zbt_adaptive_probe || {
+		zbt_adaptive_status 'Waiting for this modem to remain stable after dialing, with verified IPv4 Internet and an online MultiWAN tracker.'; return 1;
 	}
 	serving=$(zbt_adaptive_serving) || {
 		zbt_adaptive_status 'Waiting for a valid registered SA/NSA serving cell and signal reading; LTE-only or unknown is not a comparison.'; return 1;

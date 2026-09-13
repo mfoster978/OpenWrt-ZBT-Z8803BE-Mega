@@ -41,7 +41,7 @@ does not restart netifd or the network. Subsequent healthy passes are read-only.
 Logs use `zbt-mwan-reconcile`; `result=dispatched` means a rebuild was requested,
 not that end-user connectivity has been independently verified.
 
-The reconciliation runs with the existing health loop (normally 30 seconds
+The reconciliation runs with the existing health loop (normally 20 seconds
 plus probe time), including when automatic destructive recovery is disabled.
 For a supervised live QMI session, it also clears a retained generated
 `network.<slot>.disabled` option before retrying publication. That option makes

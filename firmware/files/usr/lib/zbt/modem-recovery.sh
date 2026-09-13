@@ -104,7 +104,7 @@ zbt_recovery_resume() (
 )
 zbt_recovery_check() {
 	local previous_last previous_fails result
-	local section="$1" key="$2" now fails=0 good=0 last=0 attempts=0 window=0 cycles=0 rx=0 oldrx=0 oldindex=0 index delta=0 reason=unreachable threshold cooldown limit action grace
+	local section="$1" key="$2" now fails=0 good=0 last=0 attempts=0 window=0 cycles=0 rx=0 oldrx=0 oldindex=0 index delta=0 reason=unreachable threshold cooldown verify limit action grace
 	now=$(zbt_health_now)
 	mkdir -p "$ZBT_RECOVERY_DIR"
 	if ! zbt_recovery_allowed "$section"; then
@@ -124,9 +124,15 @@ zbt_recovery_check() {
 	[ "$index" != "$oldindex" ] || [ "$rx" -lt "$oldrx" ] || delta=$((rx - oldrx))
 	[ "$delta" -lt 100 ] || reason=rx_errors_growing
 	[ -f "$ZBT_RECOVERY_DIR/$section.qmi-lost" ] && reason=qmi_session_lost
-	threshold=$(zbt_recovery_uint "$(zbt_recovery_get global.ping_fail_threshold)" 4 2 20)
+	threshold=$(zbt_recovery_uint "$(zbt_recovery_get global.ping_fail_threshold)" 3 2 20)
 	cooldown=$(zbt_recovery_uint "$(zbt_recovery_get global.cooldown_seconds)" 180 180 3600)
-	grace=$(zbt_recovery_uint "$(zbt_recovery_get global.boot_grace_seconds)" 120 60 600)
+	grace=$(zbt_recovery_uint "$(zbt_recovery_get global.boot_grace_seconds)" 60 60 600)
+	limit=$(zbt_recovery_uint "$(zbt_recovery_get "$key.redial_attempts")" 1 0 2)
+	# A soft redial is deliberately verified sooner than a GPIO reset.  If the
+	# same slot still has no direct Internet, escalate without waiting for the
+	# destructive-action storm cooldown.
+	verify=$(zbt_recovery_uint "$(zbt_recovery_get global.redial_verify_seconds)" 60 30 180)
+	if [ "$attempts" -gt 0 ] && [ "$attempts" -le "$limit" ]; then cooldown=$verify; fi
 	if [ "$ZBT_HEALTH" = online ]; then
 		good=$((good + 1))
 		if [ "$good" -ge 3 ]; then fails=0; attempts=0; rm -f "$ZBT_RECOVERY_DIR/$section.qmi-lost"; fi
@@ -140,8 +146,7 @@ zbt_recovery_check() {
 		[ "$now" -ge "$grace" ] && { [ "$last" = 0 ] || [ $((now - last)) -ge "$cooldown" ]; } &&
 		[ "$cycles" -lt 3 ]; then
 		action=$(zbt_recovery_get "$key.action")
-		limit=$(zbt_recovery_uint "$(zbt_recovery_get "$key.redial_attempts")" 0 0 2)
-		if [ "$action" = power_cycle ] && [ "$attempts" -lt "$limit" ] && [ "$reason" = unreachable ]; then action=redial; fi
+		if [ "$action" = power_cycle ] && [ "$attempts" -lt "$limit" ] && [ "$reason" != rx_errors_growing ]; then action=redial; fi
 		case "$action" in
 			power_cycle|redial|disconnect)
 				# A busy adaptive worker is not an attempt and consumes no budget.

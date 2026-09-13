@@ -17,6 +17,7 @@ for script in \
   firmware/files/etc/uci-defaults/99-zbt-route-priority-repair \
   firmware/files/etc/uci-defaults/99-speedify-bootstrap \
   firmware/files/etc/uci-defaults/99-cellular-multiwan-defaults \
+  firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v2 \
   firmware/files/etc/hotplug.d/net/15-zbt-rndis-auto \
   firmware/files/etc/hotplug.d/usb/40-zbt-qmodem-autoenable \
   firmware/files/usr/lib/zbt/qmodem-start.sh \
@@ -28,6 +29,11 @@ for script in \
   firmware/scripts/verify-router-runtime.sh; do
   sh -n "${script}"
 done
+
+test -x firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v2
+grep -Fq 'redial_attempts=1' firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v2
+grep -Fq 'action=dialer-exited' firmware/files/usr/lib/zbt/qmodem-start.sh
+grep -Fq 'zbt-qmodem-session-start.lock' firmware/files/usr/lib/zbt/qmodem-start.sh
 
 # Cover every new overlay/feed shell entry point, including rpcd backends
 # whose filenames do not end in .sh. Libraries are parsed but never run.

@@ -291,12 +291,13 @@ function qmodemStarter() {
 }
 
 test('enabled Modem 1 waits for late USB enumeration and then dials without user action', () => {
-  const f = usbFixture();
+  const f = usbFixture(), stopped = path.join(f.dir, 'stopped');
   fs.rmSync(path.join(f.sys, 'devices/4-1/4-1:1.4/net/wwan8'), { recursive: true });
   const out = shell(qmodemStarter() + `
 uci() {
   case "$3" in
-    qmodem.main.enable_dial|qmodem.4_1.enable_dial) echo 1 ;;
+    qmodem.main.enable_dial) echo 1 ;;
+    qmodem.4_1.enable_dial) [ ! -f "$STOPPED" ] && echo 1 || echo 0 ;;
     qmodem.4_1.state) echo enabled ;;
     qmodem.4_1.path) echo "$ZBT_SYSFS/bus/usb/devices/4-1" ;;
     qmodem.4_1.at_port) echo /dev/ttyUSB6 ;;
@@ -308,9 +309,32 @@ sleep() {
   echo wait
   mkdir -p "$ZBT_SYSFS/devices/4-1/4-1:1.4/net/wwan8"
 }
-zbt_qmodem_launch() { echo "launch:$1"; }
-zbt_qmodem_start 4_1`, f.env);
+zbt_qmodem_launch() { echo "launch:$1"; touch "$STOPPED"; }
+zbt_qmodem_start 4_1`, { ...f.env, STOPPED: stopped });
   assert.equal(out, 'wait\nlaunch:4_1');
+});
+
+test('supervised modem worker relaunches an exited dialer without a manual LuCI click', () => {
+  const f = usbFixture(), stopped = path.join(f.dir, 'stopped');
+  const out = shell(qmodemStarter() + `
+uci() {
+  case "$3" in
+    qmodem.main.enable_dial) echo 1 ;;
+    qmodem.4_1.enable_dial) [ ! -f "$STOPPED" ] && echo 1 || echo 0 ;;
+    qmodem.4_1.state) echo enabled ;;
+  esac
+}
+zbt_qmodem_ready() { return 0; }
+logger() { :; }
+sleep() { :; }
+zbt_qmodem_launch() {
+  echo "launch:$1"
+  [ -f "$DB/once" ] && { touch "$STOPPED"; return 0; }
+  touch "$DB/once"
+  return 1
+}
+zbt_qmodem_start 4_1`, { ...f.env, STOPPED: stopped, DB: f.dir });
+  assert.equal(out, 'launch:4_1\nlaunch:4_1');
 });
 
 test('boot readiness worker rejects the peer AT port and exits if its slot is disabled', () => {

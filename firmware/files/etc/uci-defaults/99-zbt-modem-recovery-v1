@@ -3,15 +3,16 @@
 [ "$(uci -q get modem_watchdog.global.recovery_v1)" = 1 ] || {
 	uci set modem_watchdog.global.enabled=1
 	uci set modem_watchdog.global.actions_enabled=1
-	uci set modem_watchdog.global.interval_seconds=30
-	uci set modem_watchdog.global.ping_fail_threshold=4
+	uci set modem_watchdog.global.interval_seconds=20
+	uci set modem_watchdog.global.ping_fail_threshold=3
 	uci set modem_watchdog.global.cooldown_seconds=180
-	uci set modem_watchdog.global.boot_grace_seconds=120
+	uci set modem_watchdog.global.redial_verify_seconds=60
+	uci set modem_watchdog.global.boot_grace_seconds=60
 	uci set modem_watchdog.global.ping6_target=2606:4700:4700::1111
 	for key in modem1 modem2; do
 		uci set "modem_watchdog.$key.enabled=1"
 		uci set "modem_watchdog.$key.action=power_cycle"
-		uci set "modem_watchdog.$key.redial_attempts=0"
+		uci set "modem_watchdog.$key.redial_attempts=1"
 	done
 	uci set modem_watchdog.global.recovery_v1=1
 	uci commit modem_watchdog

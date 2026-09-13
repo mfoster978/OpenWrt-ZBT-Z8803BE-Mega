@@ -79,11 +79,11 @@ return view.extend({
 		o.value('redial', _('Redial modem'));
 		o.value('power_cycle', _('Power cycle GPIO + redial'));
 		o.default = 'power_cycle';
-		o = modem.option(form.ListValue, 'redial_attempts', _('Redial attempts before GPIO recovery'), _('Default: go directly to GPIO recovery after confirmed failure. RX-error growth or QMI session loss skips soft retries. Each slot is limited to three recovery attempts per hour; working IPv4 or IPv6 prevents a reset.'));
+		o = modem.option(form.ListValue, 'redial_attempts', _('Redial attempts before GPIO recovery'), _('Default: try one targeted redial, verify it for 60 seconds, then power-cycle only this modem if direct Internet is still unavailable. Growing RX errors bypass the soft retry. Each slot is limited to three recovery attempts per hour; working IPv4 or IPv6 prevents a reset.'));
 		o.value('0', _('None — GPIO recovery first'));
 		o.value('1', _('One attempt'));
 		o.value('2', _('Two attempts'));
-		o.default = '0';
+		o.default = '1';
 		o = modem.option(form.DummyValue, 'gpio_power_name', _('Fixed slot power GPIO'));
 		o.default = '5g1';
 		return m.render();

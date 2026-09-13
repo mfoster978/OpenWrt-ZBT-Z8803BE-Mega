@@ -28,19 +28,21 @@ Default recovery settings, applied once on a kept-config upgrade as requested:
 | Setting | Default |
 | --- | --- |
 | Recovery service / actions / both slots | Enabled |
-| Per-modem action | GPIO power-cycle, then explicit targeted dial |
-| Optional redial attempts before GPIO | 0 (1 or 2 can be selected) |
-| Check interval | 30 seconds, plus probe execution time |
-| Failed observations before action | 4 |
+| Per-modem action | One targeted redial, then GPIO power-cycle and dial if still offline |
+| Redial attempts before GPIO | 1 (0 or 2 can be selected) |
+| Check interval | 20 seconds, plus probe execution time |
+| Failed observations before action | 3 |
 | Successful observations to clear a failure streak | 3 |
-| Startup grace | 120 seconds; no action occurs before this expires |
+| Startup grace | 60 seconds; no action occurs before this expires |
+| Soft-redial verification window | 60 seconds |
 | Minimum cooldown between attempts | 180 seconds after the attempt |
 | Maximum recovery requests | 3 per physical modem per hour |
 | Power-off pulse / enumeration wait | 3 seconds / up to 60 seconds |
 
-The watchdog reads RX-error growth and QMI child-loss markers. With optional
-redial-first enabled, either condition bypasses soft retries when connectivity
-also fails. High error counters **alone** do not reset a working connection.
+The watchdog reads RX-error growth and QMI child-loss markers. A confirmed QMI
+child loss receives the configured targeted redial first; growing RX errors
+bypass that soft attempt and go directly to GPIO recovery. High error counters
+**alone** do not reset a working connection.
 Counters and cooldowns survive dialer/service restarts in RAM; reboots start a
 new grace period. Long outages can still be retried in later hourly windows.
 The cooldown is measured from a completed recovery request, so it cannot delay
@@ -55,10 +57,16 @@ pulse is restored; an unmarked manual power-off is not reversed.
 
 Each enabled QModem slot also has a persistent procd startup worker. It waits
 for that physical slot's exact USB path, single netdev and owned AT port before
-launching the dialer. If enumeration finishes after the initial service pass,
-the worker continues retrying rather than requiring a manual Dial click. A
-dialer exit respawns through the same readiness gate and cannot borrow the peer
-modem's netdev or serial port.
+launching the dialer. Initial session establishment is serialized only until the
+selected slot holds an address for ten seconds (at most 60 seconds), preventing the backup's
+first netifd/QMI setup from overlapping the primary. If enumeration finishes
+after the initial service pass or the dialer later exits, the same worker retries
+through its readiness gate rather than requiring a manual Dial click. It cannot
+borrow the peer modem's netdev or serial port.
+
+Automatic adaptive SA/NSA evaluation additionally requires six consecutive
+direct-health successes and no QMI-loss/recovery marker. It cannot test or write
+a radio mode during the unstable period immediately after a modem reconnects.
 
 The separate QModem monitor remains disabled so it cannot race the central
 watchdog. Later user recovery opt-outs survive upgrades and routing presets.
