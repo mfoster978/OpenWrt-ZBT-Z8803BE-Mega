@@ -27,7 +27,13 @@ jobs:
       - name: Verify per-modem TTL on real IPv4 and IPv6 packets in an isolated network
         run: sudo env "PATH=$PATH" ZBT_TEST_NFT=1 unshare --net -- node --test firmware/tests/ttl.test.cjs
       - name: Verify failed QMI cleanup preserves peer modem and LAN in an isolated network
-        run: sudo env "MEGA_TEST_REPO=$GITHUB_WORKSPACE" MEGA_ISOLATED_NETWORK_TEST=1 unshare --net -- sh firmware/tests/qmi-routing.sh
+        # sysfs is network-namespace scoped when mounted. A network-only
+        # unshare still shows the runner's original interface directory.
+        run: |
+          sudo env "MEGA_TEST_REPO=$GITHUB_WORKSPACE" MEGA_ISOLATED_NETWORK_TEST=1 unshare --net --mount -- sh -c '
+            mount -t sysfs -o ro,nosuid,nodev,noexec sysfs /sys
+            exec sh "$MEGA_TEST_REPO/firmware/tests/qmi-routing.sh"
+          '
   speedtest-engine:
     runs-on: ubuntu-latest
     timeout-minutes: 10
