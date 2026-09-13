@@ -3,16 +3,17 @@
 # radio settings, modem sessions or firewall-zone membership.
 
 zbt_mwan_reconcile_iface() {
-	local interface="$1" section family device address id current
+	local interface="$1" section family device address id current tracker started
 	case "$interface" in
 		4_1|2_1) section=$interface; family=4 ;;
 		4_1v6|2_1v6) section=${interface%v6}; family=6 ;;
 		*) return 0 ;;
 	esac
 	[ ! -f "/tmp/zbt-5g/$section/maintenance" ] || return 0
-	# Only a fresh, actively tracked connection may be promoted. Paused,
-	# disabled, stale or intentionally untracked interfaces are not promoted.
-	zbt_mwan_online "$interface" || return 0
+	# Never override an intentionally disabled interface. A paused or absent
+	# runtime tracker may still need a targeted ifup after QMI has published a
+	# valid address and a direct, device-bound probe has proven Internet access.
+	[ "$(uci -q get "mwan3.$interface.enabled")" = 1 ] || return 0
 	zbt_health_online "$section" || return 0
 	local stamp health_device index health v4 v6
 	read -r stamp health_device index health v4 v6 < "$ZBT_HEALTH_DIR/$section" || return 0
@@ -30,6 +31,20 @@ zbt_mwan_reconcile_iface() {
 	ip -o -"$family" addr show dev "$device" scope global | awk -v ip="$address" '
 		/ inet/ && !/ tentative| dadfailed/ { split($4,a,"/"); if(a[1]==ip) found=1 }
 		END { exit !found }' || return 0
+	if ! zbt_mwan_online "$interface"; then
+		tracker=$(cat "${ZBT_MWAN_TRACK:-/var/run/mwan3track}/$interface/STATUS" 2>/dev/null)
+		started=$(cat "${ZBT_MWAN_TRACK:-/var/run/mwan3track}/$interface/STARTED" 2>/dev/null)
+		case "$tracker:$started" in
+			paused:*|disabled:*|:0|:|online:0|offline:0)
+				zbt_mwan_refresh "$section" "$device" "$address" '' "$family"
+				[ "$ZBT_MWAN_REFRESHED" = 1 ] &&
+					logger -t zbt-mwan-reconcile "iface=$interface family=$family direct_health=online tracker=${tracker:-missing} started=${started:-missing} action=tracker_ifup"
+				;;
+		esac
+		# Promotion remains fail-closed. The next watchdog cycle must observe a
+		# fresh online tracker before routes or policy state can be rebuilt.
+		return 0
+	fi
 	mwan3_get_iface_id id "$interface"
 	case "$id" in ''|*[!0-9]*|0) return 0 ;; esac
 	# A tracker uses its own bound socket. It can pass even if the forwarding

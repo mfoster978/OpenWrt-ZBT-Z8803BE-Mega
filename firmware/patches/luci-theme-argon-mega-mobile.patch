@@ -6,7 +6,14 @@ index 0637eb0..9d6fe43 100644
  	{% if (node?.css): %}
  	<link rel="stylesheet" href="{{ resource }}/{{ node.css}}">
  	{% endif -%}
-+	<link rel="stylesheet" href="{{ resource }}/zbt-mega-mobile.css?v={{ version.luciversion }}">
++	<link rel="stylesheet" href="{{ resource }}/zbt-mega-mobile.css?v={{ pkgs_update_time }}">
  	{% if (css): %}
  	<style title="text/css">
  		{{ css }}
+@@ -122,3 +123,3 @@
+-	<script src="{{ dispatcher.build_url('admin/translations', dispatcher.lang) }}?v={{ version.luciversion }}"></script>
+-	<script src="{{ resource }}/cbi.js?v={{ version.luciversion }}"></script>
+-	<script src="{{ resource }}/luci.js?v={{ version.luciversion }}"></script>
++	<script src="{{ dispatcher.build_url('admin/translations', dispatcher.lang) }}?v={{ pkgs_update_time }}"></script>
++	<script src="{{ resource }}/cbi.js?v={{ pkgs_update_time }}"></script>
++	<script src="{{ resource }}/luci.js?v={{ pkgs_update_time }}"></script>

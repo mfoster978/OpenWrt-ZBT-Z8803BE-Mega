@@ -46,6 +46,12 @@ mwan3_set_iface_hotplug_state() { echo "$2" > "$DB/state/iface_state/$1"; echo "
 mwan3_set_policies_iptables() { echo build >> "$DB/calls"; echo online > "$DB/policy"; }
 mwan3_create_iface_route() { echo "route $*" >> "$DB/calls"; [ "$ROUTE_FAIL" = 1 ] || touch "$DB/route"; }
 mwan3_create_iface_rules() { echo "rules $*" >> "$DB/calls"; }
+zbt_mwan_tracker_ifup() {
+  echo "ifup $1" >> "$DB/calls"
+  if [ "$AUTO_ONLINE" = 1 ]; then
+    echo online > "$DB/track/$1/STATUS"; echo 1 > "$DB/track/$1/STARTED"
+  fi
+}
 iptables() {
   case "$*" in *mwan3_hook*) [ "$NO_HOOK" != 1 ] ;;
     *) if [ "$(cat "$DB/policy")" = unreachable ]; then echo '-A mwan3_policy_failover --set-xmark 0x3e00/0x3f00'; else echo '-A mwan3_policy_failover --set-xmark 0x400/0x3f00'; fi ;;
@@ -62,7 +68,7 @@ IPT4=iptables; IPT6=iptables; DEFAULT_LOWEST_METRIC=256; MMX_MASK=0x3f00; MMX_UN
 `;
   const result = spawnSync('busybox',['sh','-c',lib+'\n'+mocks+'\n'+before+'\nzbt_mwan_reconcile; zbt_mwan_reconcile'],{
     encoding:'utf8',timeout:10000,env:{...process.env,DB:d,ZBT_SYSFS:path.join(d,'sys'),ZBT_HEALTH_DIR:path.join(d,'health'),
-      ZBT_MWAN_TRACK:path.join(d,'track'),MWAN3_STATUS_DIR:path.join(d,'state'),...env}
+      ZBT_MWAN_TRACK:path.join(d,'track'),ZBT_MWAN_REFRESH:path.join(d,'refresh'),MWAN3_STATUS_DIR:path.join(d,'state'),...env}
   });
   assert.ifError(result.error); assert.equal(result.status,0,result.stderr);
   return {calls:fs.existsSync(path.join(d,'calls'))?fs.readFileSync(path.join(d,'calls'),'utf8'):'',
@@ -79,8 +85,20 @@ test('online hotplug state with unreachable installed policy still rebuilds',()=
 test('healthy existing policy is left untouched',()=>{
   assert.equal(run('echo online > "$DB/state/iface_state/2_1"; echo online > "$DB/policy"').calls,'');
 });
-test('stale, paused, offline, dead or disabled trackers are never promoted',()=>{
-  for (const change of ['echo 800 > "$DB/track/2_1/TIME"', 'echo 0 > "$DB/track/2_1/STARTED"',
+test('paused or stopped tracker with verified direct Internet receives one targeted ifup',()=>{
+  for (const change of ['echo paused > "$DB/track/2_1/STATUS"',
+    'echo disabled > "$DB/track/2_1/STATUS"', 'echo 0 > "$DB/track/2_1/STARTED"']) {
+    const f=run(change);
+    assert.equal(f.calls,'ifup 2_1\n',change);
+    assert.match(f.log,/direct_health=online[\s\S]*action=tracker_ifup/);
+  }
+});
+test('targeted recovery requires a later fresh-online pass before policy promotion',()=>{
+  const f=run('echo paused > "$DB/track/2_1/STATUS"',{AUTO_ONLINE:'1'});
+  assert.equal(f.calls,'ifup 2_1\nstate 2_1 online\nbuild\n');
+});
+test('active offline, stale, dead or intentionally disabled trackers are never promoted',()=>{
+  for (const change of ['echo 800 > "$DB/track/2_1/TIME"',
     'echo offline > "$DB/track/2_1/STATUS"', 'echo 2147483647 > "$DB/track/2_1/PID"',
     'echo 0 > "$DB/uci/mwan3.2_1.enabled"', 'echo 0 > "$DB/uci/qmodem.2_1.enable_dial"',
     'echo 24 > "$DB/sys/class/net/wwan3/ifindex"',

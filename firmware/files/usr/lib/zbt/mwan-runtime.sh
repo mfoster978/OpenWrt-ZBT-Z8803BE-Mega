@@ -19,8 +19,12 @@ zbt_mwan_winner() {
 	done
 	return 1
 }
+zbt_mwan_tracker_ifup() {
+	"${ZBT_MWAN3_BIN:-/usr/sbin/mwan3}" ifup "$1" >/dev/null 2>&1
+}
 zbt_mwan_refresh() {
-	local section="$1" device="$2" address="$3" generation="${4:-}" family="${5:-4}" interface path state now last=0 previous=''
+	local section="$1" device="$2" address="$3" generation="${4:-}" family="${5:-4}" interface path state started now last=0 previous=''
+	ZBT_MWAN_REFRESHED=0
 	case "$section" in 4_1|2_1) ;; *) return 1 ;; esac
 	interface=$section
 	[ "$family" != 6 ] || interface="${section}v6"
@@ -36,12 +40,17 @@ zbt_mwan_refresh() {
 	case "$last" in ''|*[!0-9]*) last=0 ;; esac
 	now=$(zbt_mwan_now)
 	state=$(cat "${ZBT_MWAN_TRACK:-/var/run/mwan3track}/$interface/STATUS" 2>/dev/null)
+	started=$(cat "${ZBT_MWAN_TRACK:-/var/run/mwan3track}/$interface/STARTED" 2>/dev/null)
 	if [ "$previous" != "$device:$address:$generation" ] || {
-		case "$state" in paused|disabled|'') [ $((now - last)) -ge 60 ] ;; *) false ;; esac
+		case "$state:$started" in
+			paused:*|disabled:*|:0|:|online:0|offline:0) [ $((now - last)) -ge 60 ] ;;
+			*) false ;;
+		esac
 		}; then
 		# QMI publishes its IP asynchronously after protocol setup. Rebuild
 		# only this tracker/routing table with the now-valid device and source IP.
 		printf '%s %s\n' "$now" "$device:$address:$generation" > "$path/$interface"
-		/usr/sbin/mwan3 ifup "$interface" >/dev/null 2>&1
+		zbt_mwan_tracker_ifup "$interface"
+		ZBT_MWAN_REFRESHED=1
 	fi
 }

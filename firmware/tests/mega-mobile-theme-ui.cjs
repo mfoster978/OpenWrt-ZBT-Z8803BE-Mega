@@ -8,6 +8,12 @@ const { chromium } = require('playwright');
 
 const root = path.resolve(__dirname, '../..');
 const css = fs.readFileSync(path.join(root, 'firmware/files/www/luci-static/resources/zbt-mega-mobile.css'), 'utf8');
+const argonPatch = fs.readFileSync(path.join(root, 'firmware/patches/luci-theme-argon-mega-mobile.patch'), 'utf8');
+const resourcePatch = fs.readFileSync(path.join(root, 'firmware/patches/luci-mega-resource-version.patch'), 'utf8');
+assert.match(argonPatch, /zbt-mega-mobile\.css\?v=\{\{ pkgs_update_time \}\}/);
+assert.match(argonPatch, /luci\.js\?v=\{\{ pkgs_update_time \}\}/);
+assert.doesNotMatch(argonPatch, /luci\.js\?v=\{\{ version\.luciversion \}\}/);
+assert.match(resourcePatch, /\/rom\/etc\/zbt-mega-build\.json/);
 const markup = `<!doctype html>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Mega mobile configuration fixture</title>
