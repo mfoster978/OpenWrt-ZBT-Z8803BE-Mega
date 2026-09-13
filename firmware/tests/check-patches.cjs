@@ -10,7 +10,8 @@ const root = path.resolve(__dirname, '../..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'zbt-pinned-patches-'));
 const specs = [
   ['qmodem-firstboot', '0xFar5eer/openwrt25.12_ZBT_Z8803BE', 'edc738504fe8fae81eb15de967456204699b1830', 'zbt-qmodem-rpc-firstboot.patch', ''],
-  ['qmodem', 'FUjr/QModem', 'a8b8a63e5b0853c79d2ad3f1ebbb673a724872bf', ['qmodem-dual-runtime.patch', 'qmodem-cell-discovery.patch', 'qmodem-5g-deployment.patch', 'qmodem-performance-ui.patch', 'qmodem-mega-policy-ui.patch', 'qmodem-connectivity-v5.patch', 'qmodem-at-transport-v6.patch', 'qmodem-radio-rpc-v6.patch'], ''],
+  ['qmodem', 'FUjr/QModem', 'a8b8a63e5b0853c79d2ad3f1ebbb673a724872bf', ['qmodem-dual-runtime.patch', 'qmodem-cell-discovery.patch', 'qmodem-5g-deployment.patch', 'qmodem-performance-ui.patch', 'qmodem-mega-policy-ui.patch', 'qmodem-connectivity-v5.patch', 'qmodem-at-transport-v6.patch', 'qmodem-radio-rpc-v6.patch', 'qmodem-session-lifecycle-v7.patch'], ''],
+  ['wifi-firstboot', '0xFar5eer/openwrt25.12_ZBT_Z8803BE', 'edc738504fe8fae81eb15de967456204699b1830', 'zbt-wifi-firstboot-v7.patch', ''],
   ['packages', 'openwrt/packages', 'db3b315119519f9194dad8aa668aa40618df9b20', 'mwan3-speed-policy.patch', ''],
   ['mwan3-luci', 'openwrt/luci', 'a611522a2bfc24ca2625e8cd2fcc9404288532a6', 'luci-app-mwan3-route-metric.patch', ''],
   ['luci-first-login', 'openwrt/luci', 'a611522a2bfc24ca2625e8cd2fcc9404288532a6', 'luci-first-login-password.patch', ''],
@@ -27,6 +28,7 @@ function run(command, args, options = {}) {
 }
 (async () => {
   await require('./check-ethernet-leds.cjs')(root, tmp, run);
+  await require('./pcie-clocks.cjs')(root, tmp, run);
   const dtsURL = 'https://raw.githubusercontent.com/0xFar5eer/openwrt25.12_ZBT_Z8803BE/edc738504fe8fae81eb15de967456204699b1830/target/linux/mediatek/dts/mt7988a-zbtlink-zbt-z8803be.dts';
   const response = await fetch(dtsURL, { signal: AbortSignal.timeout(20000) });
   assert.equal(response.status, 200);
@@ -126,6 +128,7 @@ function run(command, args, options = {}) {
     }
     console.log(`${name}: exact pinned patch, reverse/idempotence check and syntax passed (${commit})`);
     if (name === 'qmodem-firstboot') require('./qmodem-firstboot.cjs')(root, tree, run);
+    if (name === 'wifi-firstboot') require('./wifi-firstboot.cjs')(root, tree, run);
     if (name === 'qmodem') {
       const source = path.join(tree, 'application/tom_modem/src');
       const binary = path.join(tmp, 'tom_modem');
@@ -134,7 +137,7 @@ function run(command, args, options = {}) {
       process.stdout.write(run('python3', [path.join(__dirname, 'tom-modem-transport.py'), binary]));
     }
   }
-  const result = run(process.execPath, ['--test', path.join(__dirname, 'runtime.test.cjs'), path.join(__dirname, 'connectivity.test.cjs'), path.join(__dirname, 'led-labels.test.cjs'), path.join(__dirname, 'ttl.test.cjs'), path.join(__dirname, 'bands.test.cjs'), path.join(__dirname, 'band-ui.test.cjs'), path.join(__dirname, 'mlo-ui.test.cjs')], {
+  const result = run(process.execPath, ['--test', path.join(__dirname, 'runtime.test.cjs'), path.join(__dirname, 'qmi-session.test.cjs'), path.join(__dirname, 'connectivity.test.cjs'), path.join(__dirname, 'led-labels.test.cjs'), path.join(__dirname, 'ttl.test.cjs'), path.join(__dirname, 'bands.test.cjs'), path.join(__dirname, 'band-ui.test.cjs'), path.join(__dirname, 'mlo-ui.test.cjs')], {
     env: {
       ...process.env,
       QMODEM_TEST_TREE: path.join(tmp, 'qmodem'),

@@ -14,12 +14,9 @@ case "$(board_name)" in
 	*) exit 0 ;;
 esac
 
-# The pinned vendor script runs immediately before this one and creates the
-# three radios on a clean install. Retain the same fallback for unusual
-# first-boot ordering and settings-preserving upgrades.
-[ -s /etc/config/wireless ] || /sbin/wifi config >/dev/null 2>&1
-[ -s /etc/config/wireless ] || /sbin/wifi detect > /etc/config/wireless 2>/dev/null
-[ -s /etc/config/wireless ] || exit 0
+# The preceding board default generates only after PHY registration. If it
+# cannot yet do so, retain this script too; never consume an empty config.
+uci -q show wireless | grep -q '=wifi-device$' || exit 1
 
 changed=0
 for radio in $(uci -q show wireless | sed -nE 's/^wireless\.([^.]+)=wifi-device$/\1/p'); do

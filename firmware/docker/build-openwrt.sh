@@ -59,7 +59,7 @@ fi
 # Reverse only our exact known patches. Do not reset an entire checkout or
 # discard unrelated local edits while preparing a cached build.
 if ! git -C feeds/qmodem diff --quiet; then
-  for patch_name in qmodem-radio-rpc-v6.patch qmodem-at-transport-v6.patch qmodem-connectivity-v5.patch qmodem-mega-policy-ui.patch qmodem-performance-ui.patch qmodem-5g-deployment.patch qmodem-cell-discovery.patch qmodem-dual-runtime.patch; do
+  for patch_name in qmodem-session-lifecycle-v7.patch qmodem-radio-rpc-v6.patch qmodem-at-transport-v6.patch qmodem-connectivity-v5.patch qmodem-mega-policy-ui.patch qmodem-performance-ui.patch qmodem-5g-deployment.patch qmodem-cell-discovery.patch qmodem-dual-runtime.patch; do
     stack_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/$patch_name"
     # --force disables GNU patch's automatic reversal guessing. In batch
     # mode alone an absent patch can be applied while asking to reverse it.
@@ -157,7 +157,7 @@ elif ! patch --dry-run --batch --fuzz=0 --reverse -p1 -d feeds/qmodem < "$policy
 fi
 connectivity_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/qmodem-connectivity-v5.patch"
 patch --batch --fuzz=0 --forward -p1 -d feeds/qmodem < "$connectivity_patch"
-for patch_name in qmodem-at-transport-v6.patch qmodem-radio-rpc-v6.patch; do
+for patch_name in qmodem-at-transport-v6.patch qmodem-radio-rpc-v6.patch qmodem-session-lifecycle-v7.patch; do
   patch --batch --fuzz=0 --forward -p1 -d feeds/qmodem < "$(dirname "${FILES_OVERLAY_DIR}")/patches/$patch_name"
 done
 for apn in broadband NXTGENPHONE ENHANCEDPHONE firstnet-broadband fast.t-mobile.com vzwinternet h2g2 h2g2-t usccinternet; do
@@ -216,6 +216,19 @@ kernel_led_patch_target=target/linux/mediatek/patches-6.12/753-net-phy-mediatek-
 if ! cmp -s "$kernel_led_patch" "$kernel_led_patch_target"; then
   cp "$kernel_led_patch" "$kernel_led_patch_target"
 fi
+# Restore the upstream external PCIe clocks without changing the pinned
+# board reset ordering, driver, EEPROM or modem power/SIM wiring.
+pcie_clock_patch="$(dirname "${FILES_OVERLAY_DIR}")/kernel-patches/967-arm64-dts-mt7988-pcie-external-clocks.patch"
+pcie_clock_target=target/linux/mediatek/patches-6.12/967-arm64-dts-mt7988-pcie-external-clocks.patch
+if ! cmp -s "$pcie_clock_patch" "$pcie_clock_target"; then
+  cp "$pcie_clock_patch" "$pcie_clock_target"
+fi
+wifi_boot_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/zbt-wifi-firstboot-v7.patch"
+if patch --dry-run --force --fuzz=0 --reverse -p1 < "$wifi_boot_patch" >/dev/null; then
+  : # already present
+else
+  patch --batch --fuzz=0 --forward -p1 < "$wifi_boot_patch"
+fi
 # The upstream US 6 GHz rule is client-only (NO-IR), which makes a US AP
 # impossible even when hostapd advertises the FCC VLP device class. Install a
 # reviewed package patch that permits only the 14 dBm VLP ceiling; the higher
@@ -226,12 +239,16 @@ if ! cmp -s "$regdb_patch" "$regdb_patch_target"; then
   cp "$regdb_patch" "$regdb_patch_target"
 fi
 policy_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/mwan3-speed-policy.patch"
-if patch --dry-run --batch --fuzz=0 --forward -p1 -d feeds/packages < "$policy_patch" >/dev/null; then
-  patch --batch --fuzz=0 --forward -p1 -d feeds/packages < "$policy_patch"
-elif ! patch --dry-run --batch --fuzz=0 --reverse -p1 -d feeds/packages < "$policy_patch" >/dev/null; then
-  echo 'mwan3 speed-policy patch does not match pinned feed' >&2
-  exit 3
-fi
+# This insertion remains forward-applicable after application. Remove only
+# exact known copies (including duplicates from older cached builds), check
+# the target is otherwise pristine, then apply once. No checkout/reset.
+while patch --dry-run --force --fuzz=0 --reverse -p1 -d feeds/packages < "$policy_patch" >/dev/null; do
+  patch --force --fuzz=0 --reverse -p1 -d feeds/packages < "$policy_patch"
+done
+git -C feeds/packages diff --quiet -- net/mwan3/files/lib/mwan3/mwan3.sh || {
+  echo 'Unrecognized mwan3 edits; preserving source for inspection' >&2; exit 3;
+}
+patch --batch --fuzz=0 --forward -p1 -d feeds/packages < "$policy_patch"
 mwan_luci_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/luci-app-mwan3-route-metric.patch"
 if patch --dry-run --batch --fuzz=0 --forward -p1 -d feeds/luci < "$mwan_luci_patch" >/dev/null; then
   patch --batch --fuzz=0 --forward -p1 -d feeds/luci < "$mwan_luci_patch"
@@ -614,9 +631,19 @@ for overlay_file in "${required_overlay_files[@]}"; do
   fi
 done
 echo "Validated files overlay in root filesystem: ${rootfs_dir}"
-for overlay_file in usr/lib/zbt/qmodem-5g.sh usr/lib/zbt/mwan3-speed-metric.sh usr/libexec/rpcd/zbt.speedify usr/share/rpcd/acl.d/zbt-speedify.json usr/share/zbt/speedify-luci-wrapper.js etc/uci-defaults/99-zbt-modem-route-v5; do
+for overlay_file in usr/lib/zbt/qmodem-5g.sh usr/lib/zbt/qmi-session.sh usr/sbin/zbt-wifi-firstboot etc/init.d/zbt-wifi-firstboot etc/uci-defaults/71-zbt-wifi-firstboot usr/lib/zbt/mwan3-speed-metric.sh usr/libexec/rpcd/zbt.speedify usr/share/rpcd/acl.d/zbt-speedify.json usr/share/zbt/speedify-luci-wrapper.js etc/uci-defaults/99-zbt-modem-route-v5; do
   cmp "${FILES_OVERLAY_DIR}/${overlay_file}" "${rootfs_dir}/${overlay_file}" || exit 4
 done
+# Check the actual installed dialer and authoritative board defaults, not
+# only overlay helpers which would be inert without their pinned call sites.
+grep -Fq 'zbt_qmi_session "$@"' "${rootfs_dir}/usr/share/qmodem/modem_dial.sh" || exit 4
+grep -Fq '[ -d "$1" ] || exit 1' "${rootfs_dir}/etc/uci-defaults/72-zbt-z8803be-wifi" || exit 4
+if grep -q '/sbin/wifi reload' "${rootfs_dir}/etc/uci-defaults/72-zbt-z8803be-wifi"; then
+  echo 'Unsafe first-boot wireless reload survived into the image' >&2; exit 4;
+fi
+[ "$(grep -c 'metric=$(zbt_speed_metric' "${rootfs_dir}/lib/mwan3/mwan3.sh")" = 1 ] || {
+  echo 'mwan3 image has missing/duplicated metric hook' >&2; exit 4;
+}
 # A package/base-files install must expose exactly one modem LED owner. S97
 # deliberately runs after OpenWrt's generic S96 LED configuration service.
 [ "$(readlink "${rootfs_dir}/etc/rc.d/S97zbt-modem-leds")" = ../init.d/zbt-modem-leds ] || {
@@ -811,3 +838,14 @@ for image_pattern in '*zbt-z8803be-initramfs-kernel.bin' '*zbt-z8803be-squashfs-
   fi
   echo "Validated firmware image: ${image}"
 done
+# A newly added kernel patch must invalidate cached preparation. Refuse a
+# release if the actual kernel tree used by the image still has four clocks.
+clock_tree_checked=0
+for kernel_dtsi in build_dir/target-*/linux-mediatek_filogic/linux-6.12.74/arch/arm64/boot/dts/mediatek/mt7988a.dtsi; do
+  [ -f "$kernel_dtsi" ] || continue
+  [ "$(grep -c '"pextp_clk"' "$kernel_dtsi")" = 4 ] || {
+    echo 'Kernel preparation omitted the PCIe clock backport' >&2; exit 4;
+  }
+  clock_tree_checked=1
+done
+[ "$clock_tree_checked" = 1 ] || { echo 'Cannot verify prepared kernel PCIe clocks' >&2; exit 4; }

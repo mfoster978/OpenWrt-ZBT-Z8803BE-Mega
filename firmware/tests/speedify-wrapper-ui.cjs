@@ -22,8 +22,10 @@ window.E = (tag, attrs, children) => {
   return element;
 };
 window.view = { extend: value => value };
+window.rpc = { declare: () => () => Promise.resolve(window.daemonStatus || { ok: true, signed_in: false }) };
+window.poll = { add: fn => { window.refreshDaemonStatus = fn; } };
 window.L = { env: { sessionid: 'browserTestSession' } };
-document.querySelector('main').appendChild(new Function('view', 'E', '_', 'L', ${JSON.stringify(wrapper)})(view, E, _, L).render());
+document.querySelector('main').appendChild(new Function('view', 'E', '_', 'L', 'rpc', 'poll', ${JSON.stringify(wrapper)})(view, E, _, L, rpc, poll).render());
 `;
 (async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mega-speedify-native-'));
@@ -112,6 +114,17 @@ document.querySelector('main').appendChild(new Function('view', 'E', '_', 'L', $
       assert.equal(page.url(), url);
       assert.equal(await page.locator('#router-menu').isVisible(), true);
       assert.equal(await page.getByText('Sign in this router', { exact: true }).count(), 0);
+      for (const [status, text] of [
+        [{ ok: true, signed_in: false, recent_error: 'ERROR_NO_ROUTER_LICENSE' }, 'ERROR_NO_ROUTER_LICENSE'],
+        [{ ok: true, signed_in: false, recent_error: 'NETWORK_ERROR' }, 'network error'],
+        [{ ok: true, signed_in: true, state: 'LOGGED_IN', tunnel_present: false }, 'VPN is not connected yet'],
+        [{ ok: true, signed_in: true, state: 'CONNECTED', tunnel_present: true }, 'VPN connected']
+      ]) {
+        await page.evaluate(async value => { window.daemonStatus = value; await window.refreshDaemonStatus(); }, status);
+        assert.ok((await page.locator('#mega-speedify-status').innerText()).includes(text));
+        assert.equal(indexRequests, before + 1, 'diagnostics do not reload native dashboard');
+        assert.equal(activationCalls, 1, 'diagnostics do not regenerate activation');
+      }
       signedIn = true;
       report('report_accounting_data', { isAutoAccount: false, email: 'test@example.invalid', bytesAvailable: 1000000000 });
       report('report_current_state', { state: 2 });

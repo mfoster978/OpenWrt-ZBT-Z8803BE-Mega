@@ -71,6 +71,15 @@ test('5G target validation rejects a stale AT override pointing at the other phy
   fs.symlinkSync(path.join(sys, 'bus/usb/devices/4-1/4-1:1.2'), target);
   assert.equal(shell(run, { ZBT_SYSFS: sys }), 'valid');
 });
+test('Quectel vendor and formatted SIM numbers work without BusyBox tr character classes', () => {
+  const mock = 'tr() { echo "unsupported character classes must not be called" >&2; return 99; }\n';
+  for (const vendor of ['Quectel', 'quectel', 'QUECTEL', 'Quectel Wireless Solutions']) {
+    assert.equal(shell(mock + radio + '\nmanufacturer="$VENDOR"; zbt_5g_vendor && echo valid', { VENDOR: vendor }), 'valid');
+  }
+  assert.equal(shell(mock + radio + '\nmanufacturer=Fibocom; zbt_5g_vendor || echo refused'), 'refused');
+  const number = read('files/usr/lib/zbt/qmodem-cell-discovery.sh');
+  assert.equal(shell(mock + number + '\nzbt_quectel_normalize_number " +1 (555) 012-3456 "'), '+15550123456');
+});
 test('Automatic preferred repairs old NSA plus NR-only settings without carrier guessing or band writes', () => {
   const f = radioFixture('1', 'NR5G'); const { out, commands } = apply(f, 'auto_preferred');
   assert.match(out, /status=0 changed=1/);
@@ -156,13 +165,31 @@ logger() { :; }
 test('Speedify RPC is read-only diagnostics; native Speedify owns activation', () => {
   const dir = path.join(tmp, String(++id)); fs.mkdirSync(dir);
   const cli = path.join(dir, 'cli');
-  fs.writeFileSync(cli, '#!/bin/sh\nprintf \'%s\\n\' "$REPLY"\nexit ${CLI_EXIT:-0}\n', { mode: 0o755 });
+  fs.writeFileSync(cli, '#!/bin/sh\nif [ "$1" = state ]; then printf \'%s\\n\' "$STATE"; else printf \'%s\\n\' "$REPLY"; fi\nexit ${CLI_EXIT:-0}\n', { mode: 0o755 });
   const rpc = read('files/usr/libexec/rpcd/zbt.speedify').replace('/usr/share/speedify/speedify_cli', cli);
-  const call = (method, reply, code = '0') => JSON.parse(shell(rpc, { REPLY: JSON.stringify(reply), CLI_EXIT: code }, ['call', method]));
+  const call = (method, reply, code = '0', state = 'LOGGED_IN') => JSON.parse(shell(rpc, { REPLY: JSON.stringify(reply), STATE: JSON.stringify({ state }), CLI_EXIT: code }, ['call', method]));
   assert.equal(call('status', { isAutoAccount: true, email: 'auto' }).signed_in, false);
   assert.equal(call('status', { isAutoAccount: false, email: 'test@example.invalid' }).signed_in, true);
+  assert.equal(call('status', { isAutoAccount: false, email: 'test@example.invalid' }, '0', 'LOGGED_OUT').signed_in, false);
+  assert.equal(call('status', { isAutoAccount: false, email: 'test@example.invalid', bytesAvailable: 0 }, '0', 'CONNECTED').signed_in, true, 'zero/unlimited quota is not proof of logout');
   assert.equal(call('status', {}).ok, false);
   assert.equal(call('status', {}, '1').ok, false);
   assert.deepEqual(JSON.parse(shell(rpc, {}, ['list'])), { status: {} });
   assert.doesNotMatch(rpc, /activationcode|activationUrl/);
+});
+test('Speedify error diagnostics return fixed categories, not log credentials, and suppress old errors after sign-in', () => {
+  const dir = path.join(tmp, String(++id)); fs.mkdirSync(dir);
+  const cli = path.join(dir, 'cli');
+  fs.writeFileSync(cli, '#!/bin/sh\nif [ "$1" = state ]; then echo "$STATE"; else echo "$ACCOUNT"; fi\n', { mode: 0o755 });
+  const log = path.join(dir, 'speedify_20260913.log');
+  const rpc = read('files/usr/libexec/rpcd/zbt.speedify').replace('/usr/share/speedify/speedify_cli', cli)
+    .replace('/tmp/speedify-logs', dir).replace('/sys/class/net/connectify0', dir + '/no-tunnel');
+  for (const error of ['ERROR_NO_ROUTER_LICENSE', 'NETWORK_ERROR', 'AUTHENTICATION_FAILED']) {
+    fs.writeFileSync(log, 'activation_url=https://example.invalid/?token=private-fixture\nNot able to login: ' + error + ' token=private-fixture\n');
+    const out = shell(rpc, { STATE: '{"state":"LOGGED_OUT"}', ACCOUNT: '{"isAutoAccount":false,"email":""}' }, ['call', 'status']);
+    assert.equal(JSON.parse(out).recent_error, error);
+    assert.doesNotMatch(out, /private-fixture|activation_url|https:/);
+  }
+  const signed = JSON.parse(shell(rpc, { STATE: '{"state":"LOGGED_IN"}', ACCOUNT: '{"isAutoAccount":false,"email":"test@example.invalid","bytesAvailable":0}' }, ['call', 'status']));
+  assert.equal(signed.signed_in, true); assert.equal(signed.tunnel_present, false); assert.equal(signed.recent_error, '');
 });

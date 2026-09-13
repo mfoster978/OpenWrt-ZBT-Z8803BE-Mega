@@ -1,0 +1,25 @@
+--- a/application/qmodem/files/usr/share/qmodem/modem_dial.sh
++++ b/application/qmodem/files/usr/share/qmodem/modem_dial.sh
+@@ -1050,19 +1050,9 @@
+         [ "$force_set_apn" != 1 ] || set -- "$@" -F
+     fi
+     set -- "$@" -f "$log_file"
+-    cm_pid=''
+-    # Stop only this invocation's child, never a process ID saved by an old
+-    # modem or a killall that would disconnect the other SIM.
+-    trap '[ -z "$cm_pid" ] || kill -TERM "$cm_pid" 2>/dev/null; wait; rm -f "${MODEM_RUNDIR}/${modem_config}_dir/$modem_config.pid"; ifdown "$interface_name"; ifdown "$interface6_name"; exit 0' INT TERM
+-    while true; do
+-        m_debug "dialing $modem_config on $modem_netcard (APN mode: $(zbt_apn_mode "$apn"))"
+-        "$@" &
+-        cm_pid=$!
+-        echo "$cm_pid" > "${MODEM_RUNDIR}/${modem_config}_dir/$modem_config.pid"
+-        wait "$cm_pid"
+-        cm_pid=''
+-        sleep 5
+-    done
++    . /usr/lib/zbt/qmi-session.sh
++    m_debug "dialing $modem_config on $modem_netcard (APN mode: $(zbt_apn_mode "$apn"))"
++    zbt_qmi_session "$@"
+ }
+ 
+ at_dial()

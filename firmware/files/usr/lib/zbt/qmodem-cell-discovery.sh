@@ -17,7 +17,8 @@ zbt_quectel_extract_number()
 zbt_quectel_normalize_number()
 {
 	local number
-	number=$(printf '%s' "$1" | tr -d '[:space:]().-')
+	# Match POSIX whitespace in awk: the router's reduced tr has no classes.
+	number=$(printf '%s' "$1" | awk '{ gsub(/[[:space:]().-]/, ""); printf "%s", $0 }')
 	case "$number" in
 		''|*[!+0-9*#]*) return 1 ;;
 	esac

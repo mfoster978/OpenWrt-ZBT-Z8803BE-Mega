@@ -13,14 +13,38 @@ if [ ! -x "$cli" ]; then
 fi
 case "$2" in
 	status)
-		if ! response=$(timeout 8 "$cli" show user 2>/dev/null); then
+		if ! response=$(timeout 5 "$cli" show user 2>/dev/null); then
 			echo '{"ok":false,"message":"The Speedify service did not answer. Check its service and Internet connection."}'
 			exit 0
 		fi
-		printf '%s' "$response" | jq -ce '
+		state=$(timeout 3 "$cli" state 2>/dev/null) || state='{}'
+		# Only fixed error categories leave the daemon log. Never return raw
+		# log lines, activation URLs, device IDs, access tokens or credentials.
+		error=''
+		for logfile in $(ls -t /tmp/speedify-logs/speedify_*.log 2>/dev/null); do
+			[ -f "$logfile" ] || continue
+			error=$(tail -n 300 "$logfile" | awk '
+				/Not able to login|[Ll]ogin failed|[Aa]uthentication failed/ {
+					if (/ERROR_NO_ROUTER_LICENSE/) error="ERROR_NO_ROUTER_LICENSE"
+					else if (/NETWORK_ERROR/) error="NETWORK_ERROR"
+					else error="AUTHENTICATION_FAILED"
+				}
+				END { print error }')
+			break
+		done
+		tunnel=false
+		[ ! -e /sys/class/net/connectify0 ] || tunnel=true
+		printf '%s' "$response" | jq -ce --arg state "$state" --arg recent_error "$error" --argjson tunnel "$tunnel" '
 			if type != "object" or (.isAutoAccount|type) != "boolean" then error("invalid user reply") else
-			{ok:true, signed_in:(.isAutoAccount==false and (.email|type)=="string" and (.email|length)>0),
-			email:(if (.email|type)=="string" then .email else "" end)} end' 2>/dev/null ||
+			($state | fromjson? // {}) as $daemon |
+			($daemon.state // "UNKNOWN") as $status |
+			(.isAutoAccount==false and (.email|type)=="string" and (.email|length)>0 and
+			 (["LOGGED_IN", "CONNECTING", "CONNECTED", "DISCONNECTING"] | index($status)) != null) as $signed |
+			{ok:true, signed_in:$signed, tunnel_present:$tunnel,
+			 state:(if (["LOGGED_OUT", "LOGGING_IN", "LOGGED_IN", "CONNECTING", "CONNECTED", "DISCONNECTING"] | index($status)) != null then $status else "UNKNOWN" end),
+			 recent_error:(if $signed then "" else $recent_error end),
+			 needs_internet:($daemon.action == "connect to internet and retry login"),
+			 email:(if (.email|type)=="string" then .email else "" end)} end' 2>/dev/null ||
 			echo '{"ok":false,"message":"Speedify returned an unreadable account status; sign-in has not been confirmed."}'
 		;;
 esac

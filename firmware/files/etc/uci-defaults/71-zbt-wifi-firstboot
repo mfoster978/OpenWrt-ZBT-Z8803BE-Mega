@@ -1,0 +1,4 @@
+#!/bin/sh
+# Runs before the guarded radio defaults; enable the non-blocking late retry
+# on both clean flashes and settings-preserving upgrades.
+/etc/init.d/zbt-wifi-firstboot enable

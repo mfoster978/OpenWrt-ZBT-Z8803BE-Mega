@@ -59,7 +59,12 @@ zbt_5g_write() {
 }
 
 zbt_5g_vendor() {
-	case "$(printf '%s' "$manufacturer" | tr '[:upper:]' '[:lower:]')" in *quectel*) return 0 ;; *) return 1 ;; esac
+	# The pinned router BusyBox omits tr character classes. In that build,
+	# tr '[:upper:]' '[:lower:]' turns Quectel into qlectel and blocks reads.
+	case "$manufacturer" in
+		*[Qq][Uu][Ee][Cc][Tt][Ee][Ll]*) return 0 ;;
+		*) return 1 ;;
+	esac
 }
 
 zbt_5g_target() {

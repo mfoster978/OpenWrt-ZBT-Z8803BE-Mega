@@ -1,0 +1,35 @@
+#!/bin/sh
+# Retry only known pending Wi-Fi defaults. Never reset radios, networking,
+# SSIDs or an existing configuration in response to an absent PHY.
+ready=0
+for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+	set -- /sys/class/ieee80211/phy*
+	if [ -d "$1" ] && ubus -t 2 list network.wireless 2>/dev/null | grep -qx network.wireless; then
+		ready=1
+		break
+	fi
+	sleep 5
+done
+if [ "$ready" != 1 ]; then
+	logger -t zbt-wifi 'PHY/netifd not ready; wireless defaults retained for next boot. Inspect MT7996/PCIe probe logs.'
+	exit 1
+fi
+changed=0
+for name in 72-zbt-z8803be-wifi 73-zbt-us-wifi-defaults; do
+	file="/etc/uci-defaults/$name"
+	[ -f "$file" ] || continue
+	before=$(uci -q export wireless | sha256sum)
+	if sh "$file"; then
+		rm -f "$file"
+	else
+		logger -t zbt-wifi "$name remains pending; wireless configuration was not ready"
+		exit 1
+	fi
+	[ "$before" = "$(uci -q export wireless | sha256sum)" ] || changed=1
+done
+# This worker starts after S20network and requires network.wireless above.
+# No blanket network restart and no reload if preserved settings are unchanged.
+if [ "$changed" = 1 ]; then
+	/sbin/wifi reload
+	logger -t zbt-wifi 'completed deferred wireless defaults after PHY registration'
+fi

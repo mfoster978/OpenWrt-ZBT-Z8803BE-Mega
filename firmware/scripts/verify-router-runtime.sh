@@ -77,7 +77,7 @@ uci -q show modem_watchdog
 ip -4 route show default
 ip -4 rule show
 mwan3 status 2>/dev/null || true
-ubus -t 10 call zbt.speedify status '{}' 2>/dev/null | jq '{ok, signed_in, message}' || true
+ubus -t 12 call zbt.speedify status '{}' 2>/dev/null | jq '{ok, signed_in, state, tunnel_present, recent_error, needs_internet, message}' || true
 printf '\n%s\n' 'Installed UI packages and service health'
 for package in luci-app-mwan3 luci-app-speedtest-lite zbt-speedtest luci-app-tailscale speedify luci-app-speedify; do
 	apk info -e "$package" >/dev/null 2>&1 && printf '%s=installed\n' "$package" || printf '%s=missing\n' "$package"
@@ -101,6 +101,18 @@ curl -ksS --max-time 5 -o /dev/null -w '%{http_code}\n' https://127.0.0.1/luci-a
 printf 'tailscale_state='
 tailscale status --json 2>/dev/null | jq -r '.BackendState // "Unavailable"'
 printf '\n%s\n' 'Wi-Fi regulatory state (Mega defaults: US; 6 GHz power type 2/VLP)'
+printf 'registered_phys='
+find /sys/class/ieee80211 -mindepth 1 -maxdepth 1 -name 'phy*' 2>/dev/null | wc -l
+for node in 11280000 11290000 11300000 11310000; do
+	printf 'pcie@%s clocks=' "$node"
+	tr '\000' ' ' < "/sys/firmware/devicetree/base/soc/pcie@$node/clock-names" 2>/dev/null
+	printf '\n'
+done
+printf '%s\n' 'Pending guarded Wi-Fi defaults (empty means completed)'
+for name in 72-zbt-z8803be-wifi 73-zbt-us-wifi-defaults; do
+	[ ! -f "/etc/uci-defaults/$name" ] || printf '%s\n' "$name"
+done
+dmesg | grep -E 'mt7996|Failed to get clk|failed to get clocks' | tail -n 35
 for radio in $(uci -q show wireless | sed -nE 's/^wireless\.([^.]+)=wifi-device$/\1/p'); do
 	printf 'radio=%s band=%s country=%s country3=%s channel=%s htmode=%s txpower=%s reg_power_type=%s disabled=%s\n' \
 		"$radio" "$(uci -q get "wireless.${radio}.band")" \

@@ -556,6 +556,9 @@ test('patched QMI dialer gives each modem its own device and APN arguments', { s
   const dialer = patchedFile('application/qmodem/files/usr/share/qmodem/modem_dial.sh');
   let fn = dialer.slice(dialer.indexOf('\nqmi_dial()') + 1, dialer.indexOf('\necm_dial()'));
   assert.ok(fn.startsWith('qmi_dial()'));
+  // Argument construction only; qmi-session.test.cjs exercises the real
+  // lifecycle helper with child processes, failures and tracker states.
+  fn = fn.replace('. /usr/lib/zbt/qmi-session.sh', 'zbt_qmi_session() { "$@"; }');
   fn = fn.replaceAll('/usr/lib/zbt/', root + '/firmware/files/usr/lib/zbt/').replaceAll('/usr/bin/quectel-CM-M', cm);
   for (const [section, port, net, apn, pdp, force, imsi, expectedApn] of [
     ['4_1', 'ttyUSB6', 'wwan8', '', 'ipv4v6', '', '310260123456789', ''],

@@ -1,0 +1,38 @@
+--- a/target/linux/mediatek/filogic/base-files/etc/uci-defaults/72-zbt-z8803be-wifi
++++ b/target/linux/mediatek/filogic/base-files/etc/uci-defaults/72-zbt-z8803be-wifi
+@@ -10,9 +10,15 @@
+ 	;;
+ esac
+ 
+-# Ensure /etc/config/wireless is populated (first boot races us sometimes).
++# No PHY means a driver/probe failure, not a successfully configured radio.
++# Retain this default for the guarded late-boot worker or the next boot.
++set -- /sys/class/ieee80211/phy*
++[ -d "$1" ] || exit 1
++# wifi config writes UCI itself; wifi detect is no longer supported. Never
++# redirect that deprecated command over an owner's preserved configuration.
+ [ -s /etc/config/wireless ] || /sbin/wifi config >/dev/null 2>&1
+-[ -s /etc/config/wireless ] || /sbin/wifi detect > /etc/config/wireless 2>/dev/null
++uci -q show wireless | grep -q '=wifi-device$' || exit 1
++uci -q show wireless | grep -q '=wifi-iface$' || exit 1
+ 
+ for iface in $(uci -q show wireless | sed -nE 's/^wireless\.([^.]+)=wifi-iface$/\1/p'); do
+ 	ssid=$(uci -q get "wireless.${iface}.ssid")
+@@ -133,13 +139,9 @@
+ 
+ uci -q commit wireless
+ 
+-# `wifi config` runs before uci-defaults during boot. The enabled settings
+-# above therefore need one deferred reload on a clean flash; otherwise all
+-# radios remain down until the user manually runs `wifi up`. Keep it in the
+-# background so first-boot defaults never delay procd's boot sequence.
+-(
+-	sleep 5
+-	/sbin/wifi reload >/dev/null 2>&1
+-) &
++# netifd has not started during uci-defaults. Its initial bring-up reads
++# these settings. A fixed five-second background reload races S20network
++# and can interrupt the first LAN/Wi-Fi bring-up. Only the late-boot worker
++# reloads wireless when it actually creates settings after netifd is ready.
+ 
+ exit 0

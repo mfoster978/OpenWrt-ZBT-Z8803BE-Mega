@@ -26,6 +26,8 @@ jobs:
         run: node firmware/tests/check-patches.cjs
       - name: Verify per-modem TTL on real IPv4 and IPv6 packets in an isolated network
         run: sudo env "PATH=$PATH" ZBT_TEST_NFT=1 unshare --net -- node --test firmware/tests/ttl.test.cjs
+      - name: Verify failed QMI cleanup preserves peer modem and LAN in an isolated network
+        run: sudo env "MEGA_TEST_REPO=$GITHUB_WORKSPACE" MEGA_ISOLATED_NETWORK_TEST=1 unshare --net -- sh firmware/tests/qmi-routing.sh
   speedtest-engine:
     runs-on: ubuntu-latest
     timeout-minutes: 10
