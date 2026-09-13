@@ -45,11 +45,15 @@ flows, alter IPv6 flows or touch non-NAT connections. With custom policy rules,
 pending UCI edits, or an unrecognized marking scheme it defers expiration instead
 of overriding deliberate routing.
 
-## Automatic adaptive
+## Automatic preferred and optional adaptive testing
 
-`auto_adaptive` replaces the legacy `auto_preferred` default. That old value is
-accepted as an alias; the upgrade migration changes it to the new name. Explicit
-`auto` (modem automatic, no tests), `nsa`, and `sa` policies are preserved.
+`auto` is the default and the legacy `auto_preferred` alias. It allows SA plus
+NSA and delegates deployment, cell, aggregation and mobility decisions to the
+modem and network without periodic downloads or background radio changes.
+`auto_adaptive` remains available, but only an explicit UI/RPC selection creates
+the per-modem opt-in marker that permits its worker to change a mode. An upgrade
+removes the briefly seeded implicit adaptive value while preserving explicit
+`auto`, `nsa`, `sa`, and marked adaptive policies.
 
 The read-before-write transaction uses these settings and verifies readback:
 
@@ -67,8 +71,8 @@ manual](https://www.quectel.com/content/uploads/2024/05/Quectel_RG50xQRM5xxQ_Ser
 The actual modem must return valid support and readback; a failed query defers
 the trial, it is not labeled unsupported.
 
-The procd worker waits until five minutes after boot; it does not block startup.
-For each automatic modem it requires a verified IPv4 address, fresh online
+The optional procd worker waits until five minutes after boot; it does not block
+startup. For each explicitly opted-in adaptive modem it requires a verified IPv4 address, fresh online
 MultiWAN tracker, HTTPS 204 reachability, a registered SA/NSA serving cell with
 valid signal values, and explicit selector capability readback. It then:
 
@@ -108,9 +112,10 @@ overhead and small reachability probes are additional. Limits survive restarts
 and kept-configuration upgrades; invalid accounting or a backward clock fails
 closed. The existing monitor stays off by default.
 
-Choose **Modem automatic — no performance tests** in QModem to disable the
-evaluator while allowing normal SA/NSA selection. Manual SA/NSA also disables
-testing. Advanced users may set `qmodem.4_1.zbt_5g_daily_mb` and/or
+Keep the recommended **Automatic preferred — modem/network selection** choice
+to disable the evaluator while allowing normal SA/NSA selection. Manual SA/NSA
+also disables testing. Select **Automatic adaptive** explicitly only when its
+temporary mode changes and test-data use are acceptable. Advanced users may set `qmodem.4_1.zbt_5g_daily_mb` and/or
 `qmodem.2_1.zbt_5g_daily_mb` to `0`, `150`, or `300`; the default is runtime 300,
 not an extra seeded configuration value. No first-boot benchmark runs before the
 guard conditions are met. The UI reports waiting, testing and result status.

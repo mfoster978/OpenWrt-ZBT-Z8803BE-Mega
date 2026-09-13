@@ -45,6 +45,10 @@ ip() {
   case "$*" in
     '-o -4 addr show'*) [ "$ADDR4" != 0 ] && echo '17: wwan8 inet 192.0.0.2/27 scope global wwan8' ;;
     '-o -6 addr show'*) [ "$ADDR6" = 1 ] && echo '17: wwan8 inet6 2001:db8::2/64 scope global' ;;
+    '-4 route show table main default dev wwan8')
+      [ "$ROUTE4" != 0 ] && { [ "$MODE" != route_loss ] || [ "$(cat "$DB/clock")" -lt 140 ]; } && echo 'default via 192.0.0.1 dev wwan8 metric 200' ;;
+    '-6 route show table main default dev wwan8')
+      [ "$ROUTE6" = 1 ] && { [ "$MODE" != route_loss ] || [ "$(cat "$DB/clock")" -lt 140 ]; } && echo 'default via 2001:db8::1 dev wwan8 metric 200' ;;
     *) printf 'ip %s\n' "$*" >> "$DB/calls" ;;
   esac
 }
@@ -75,7 +79,7 @@ sleep() {
 ` + body;
   const result = spawnSync('busybox', ['sh', '-c', script], {
     encoding: 'utf8', timeout: 8000,
-    env: { ...process.env, DB: dir, ZBT_SYSFS: path.join(dir, 'sys'), MODE: 'normal', ADDR4: '1', ...options }
+    env: { ...process.env, DB: dir, ZBT_SYSFS: path.join(dir, 'sys'), MODE: 'normal', ADDR4: '1', ROUTE4: '1', ...options }
   });
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr + result.stdout);
@@ -98,6 +102,13 @@ test('QMI child failure cleans the selected slot, both families and stale PID, t
 test('QMI connectivity recovery is delegated, never an address or stale tracker timer', () => {
   assert.doesNotMatch(fixture({ MODE: 'stuck', ADDR4: '0', ADDR6: '0' }).calls, /failed for 120/);
   assert.doesNotMatch(fixture({ ADDR4: '0', ADDR6: '1' }).calls, /failed for 120/);
+});
+test('QMI restarts its own session after an established kernel data path disappears', () => {
+  const f = fixture({ MODE: 'route_loss' });
+  assert.match(f.calls, /action=session-restart reason=kernel-data-path-lost misses=3/);
+  assert.match(f.out, /result=1/);
+  assert.ok(fs.existsSync(path.join(f.dir, 'watchdog/4_1.qmi-lost')));
+  assert.doesNotMatch(f.calls, /wwan3|down 2_1|network restart/);
 });
 test('QMI never tears down a live session based on mwan3 health results', () => {
   for (const options of [{ MODE: 'recover' }, { MODE: 'paused' }, { STALE: '1' }, { TRACK_ENABLED: '0' }])

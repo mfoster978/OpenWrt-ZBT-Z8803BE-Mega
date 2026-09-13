@@ -1,0 +1,22 @@
+#!/bin/sh
+# Background SA/NSA benchmarking was briefly seeded as the automatic default.
+# A trial intentionally withdraws and changes one modem, so it must be an
+# explicit owner opt-in.  Restore modem/network automatic selection once on
+# upgrade; manual NSA/SA/automatic choices remain untouched.
+[ "$(uci -q get system.zbt_5g_policy.version 2>/dev/null)" = 2 ] && exit 0
+
+changed=0
+for section in 4_1 2_1; do
+	[ "$(uci -q get "qmodem.$section")" = modem-device ] || continue
+	if [ "$(uci -q get "qmodem.$section.zbt_5g_policy")" = auto_adaptive ] &&
+		[ "$(uci -q get "qmodem.$section.zbt_5g_adaptive_opt_in")" != 1 ]; then
+		uci -q set "qmodem.$section.zbt_5g_policy=auto"
+		changed=1
+	fi
+done
+[ "$changed" = 0 ] || uci -q commit qmodem
+uci -q set system.zbt_5g_policy=runtime_defaults
+uci -q set system.zbt_5g_policy.version=2
+uci -q commit system
+/etc/init.d/zbt-5g-adaptive enable
+exit 0

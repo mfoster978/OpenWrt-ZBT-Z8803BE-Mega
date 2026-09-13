@@ -91,15 +91,25 @@ eval "$migration"
 echo 'PASS: v12 migration preserves explicit QModem disable and custom MultiWAN state'
 # Execute the actual migration body without enabling a host init service.
 eval "$(sed '/^\/etc\/init.d\/zbt-5g-adaptive enable$/d; /^exit 0$/d' "$MEGA_TEST_REPO/firmware/files/etc/uci-defaults/99-zbt-5g-adaptive-v1")"
-[ "$(uci get qmodem.4_1.zbt_5g_policy)" = auto_adaptive ]
+[ "$(uci get qmodem.4_1.zbt_5g_policy)" = auto ]
 [ "$(uci get qmodem.2_1.zbt_5g_policy)" = nsa ]
-uci set qmodem.4_1.zbt_5g_policy=sa
-uci set qmodem.2_1.zbt_5g_policy=auto
+# Firmware that briefly seeded adaptive mode did not have an explicit opt-in
+# marker. The v2 migration removes only that implicit value and preserves an
+# explicitly marked adaptive selection on the peer slot.
+uci set qmodem.4_1.zbt_5g_policy=auto_adaptive
+uci set qmodem.2_1.zbt_5g_policy=auto_adaptive
+uci set qmodem.2_1.zbt_5g_adaptive_opt_in=1
 uci commit qmodem
-eval "$(sed '/^\/etc\/init.d\/zbt-5g-adaptive enable$/d; /^exit 0$/d' "$MEGA_TEST_REPO/firmware/files/etc/uci-defaults/99-zbt-5g-adaptive-v1")"
+eval "$(sed '/^\/etc\/init.d\/zbt-5g-adaptive enable$/d; /^exit 0$/d' "$MEGA_TEST_REPO/firmware/files/etc/uci-defaults/99-zbt-5g-adaptive-v2")"
+[ "$(uci get qmodem.4_1.zbt_5g_policy)" = auto ]
+[ "$(uci get qmodem.2_1.zbt_5g_policy)" = auto_adaptive ]
+[ "$(uci get qmodem.2_1.zbt_5g_adaptive_opt_in)" = 1 ]
+[ "$(uci get system.zbt_5g_policy.version)" = 2 ]
+uci set qmodem.4_1.zbt_5g_policy=sa
+uci commit qmodem
+eval "$(sed '/^\/etc\/init.d\/zbt-5g-adaptive enable$/d; /^exit 0$/d' "$MEGA_TEST_REPO/firmware/files/etc/uci-defaults/99-zbt-5g-adaptive-v2")"
 [ "$(uci get qmodem.4_1.zbt_5g_policy)" = sa ]
-[ "$(uci get qmodem.2_1.zbt_5g_policy)" = auto ]
-echo 'PASS: actual ARM64 UCI repairs scalar failover into five ordered list entries; dynamic devices, APNs and explicit radio policies preserved'
+echo 'PASS: actual ARM64 UCI repairs failover and removes implicit adaptive mode while preserving explicit radio policies'
 
 uci set modem_watchdog.modem1=modem
 uci set modem_watchdog.modem2=modem
@@ -117,6 +127,12 @@ uci commit
 eval "$(sed '/^\/etc\/init.d\/modem_watchdog enable$/d; /^exit 0$/d' "$MEGA_TEST_REPO/firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v1")"
 set -- failover
 . "$MEGA_TEST_REPO/firmware/files/usr/sbin/zbt-mwan-preset"
+[ "$(uci get modem_watchdog.global.enabled)" = 0 ]
+[ "$(uci get modem_watchdog.modem2.action)" = none ]
+# The upgrade lifecycle must re-install/restart the central worker without
+# overriding a deliberate recovery opt-out.
+eval "$(sed '/^\/etc\/init.d\/modem_watchdog /d; /^exit 0$/d' "$MEGA_TEST_REPO/firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v3")"
+[ "$(uci get modem_watchdog.global.recovery_v3)" = 1 ]
 [ "$(uci get modem_watchdog.global.enabled)" = 0 ]
 [ "$(uci get modem_watchdog.modem2.action)" = none ]
 [ "$(uci get mwan3.default_rule6.use_policy)" = failover6 ]

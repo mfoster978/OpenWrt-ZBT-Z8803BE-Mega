@@ -109,7 +109,8 @@ test('performance choices are first, visible, read-backed, and read-only on open
   const menu = tabs.children[0];
   assert.deepEqual(menu.children.slice(0, 3).map(el => el.textContent),
     ['5G & Network Mode', 'Preferred Bands', 'Neighbor Cell']);
-  assert.match(tabs.textContent, /Automatic adaptive — measured SA\/NSA preference/);
+  assert.match(tabs.textContent, /Automatic preferred — modem\/network selection \(recommended\)/);
+  assert.match(tabs.textContent, /Automatic adaptive — measured SA\/NSA tests \(optional\)/);
   assert.match(tabs.textContent, /300 MB per modem/);
   assert.doesNotMatch(tabs.textContent, /T-Mobile/);
   assert.match(tabs.textContent, /opening this page is read-only/i);
@@ -142,7 +143,7 @@ test('failed 5G reads show diagnostics and retry instead of claiming unsupported
   assert.equal(byId(container, 'deployment_select_2_1').disabled, true);
   await button(container, 'Read settings again').fire('click');
   assert.equal(byId(container, 'deployment_select_2_1').disabled, false);
-  assert.equal(byId(container, 'deployment_select_2_1').value, 'auto_adaptive');
+  assert.equal(byId(container, 'deployment_select_2_1').value, 'auto');
   assert.equal(writes, 0);
 });
 

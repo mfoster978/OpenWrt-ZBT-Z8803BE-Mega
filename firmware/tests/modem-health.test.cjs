@@ -42,7 +42,7 @@ logger() { echo "log $*" >> "$DB/calls"; }
 ubus() { echo '{}'; }
 sleep() {
  echo "sleep $1 power=$(cat "$DB/sys/class/gpio/5g1/value")/$(cat "$DB/sys/class/gpio/5g2/value")" >> "$DB/calls"
- if [ "$1" = 3 ]; then
+ if [ "$1" = 8 ]; then
   for pair in '5g1 wwan8' '5g2 wwan3'; do set -- $pair
    if [ "$(cat "$DB/sys/class/gpio/$1/value")" = 0 ]; then echo $(( $(cat "$DB/sys/class/net/$2/ifindex") + 1 )) > "$DB/sys/class/net/$2/ifindex"; fi
   done
@@ -81,7 +81,7 @@ rm "$DB/recovery/4_1.recovering"; echo 0 > "$DB/uci/qmodem.4_1.enable_dial"; zbt
 test('three failed probes trigger only selected GPIO, then explicitly dial; cooldown prevents storms',()=>{
   const f=fixture('echo 0 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; cycle; cycle; cycle; cycle; cycle; cycle');
   assert.equal((f.calls.match(/service hang 4_1/g)||[]).length,1);
-  assert.match(f.calls,/service hang 4_1\nsleep 3 power=0\/1\nservice dial 4_1/);
+  assert.match(f.calls,/service hang 4_1\nsleep 8 power=0\/1\nservice dial 4_1/);
   assert.doesNotMatch(f.calls,/service (?:redial|.*2_1)/);
   assert.equal(fs.readFileSync(path.join(f.d,'sys/class/gpio/5g1/value'),'utf8').trim(),'1');
 });
@@ -99,7 +99,7 @@ test('IPv6-only and dual-stack partial success prevent GPIO recovery',()=>{
 });
 test('Modem 2 GPIO recovery leaves Modem 1 alone and explicitly starts Modem 2',()=>{
   const f=fixture('echo 0 > "$DB/uci/modem_watchdog.modem2.redial_attempts"; for n in 1 2 3 4; do zbt_health_probe 2_1 || :; zbt_recovery_check 2_1 modem2; done');
-  assert.match(f.calls,/service hang 2_1\nsleep 3 power=1\/0\nservice dial 2_1/);
+  assert.match(f.calls,/service hang 2_1\nsleep 8 power=1\/0\nservice dial 2_1/);
   assert.doesNotMatch(f.calls,/service .*4_1/);
 });
 test('only an interrupted owned GPIO pulse is restored; manual power-off is preserved',()=>{

@@ -37,7 +37,7 @@ Default recovery settings, applied once on a kept-config upgrade as requested:
 | Soft-redial verification window | 60 seconds |
 | Minimum cooldown between attempts | 180 seconds after the attempt |
 | Maximum recovery requests | 3 per physical modem per hour |
-| Power-off pulse / enumeration wait | 3 seconds / up to 60 seconds |
+| Power-off pulse / enumeration wait | 8 seconds / up to 60 seconds |
 
 The watchdog reads RX-error growth and QMI child-loss markers. A confirmed QMI
 child loss receives the configured targeted redial first; growing RX errors
@@ -64,9 +64,11 @@ after the initial service pass or the dialer later exits, the same worker retrie
 through its readiness gate rather than requiring a manual Dial click. It cannot
 borrow the peer modem's netdev or serial port.
 
-Automatic adaptive SA/NSA evaluation additionally requires six consecutive
-direct-health successes and no QMI-loss/recovery marker. It cannot test or write
-a radio mode during the unstable period immediately after a modem reconnects.
+Automatic adaptive SA/NSA evaluation is explicit opt-in and additionally
+requires six consecutive direct-health successes and no QMI-loss/recovery
+marker. It cannot test or write a radio mode during the unstable period
+immediately after a modem reconnects. Automatic preferred performs no background
+evaluation or periodic radio write.
 
 The separate QModem monitor remains disabled so it cannot race the central
 watchdog. Later user recovery opt-outs survive upgrades and routing presets.
@@ -85,6 +87,12 @@ IPv4 parent that may never come up on an IPv6-only PDP.
 A living CM is no longer destroyed by a 120-second mwan3-offline timer. The
 watchdog independently tests the data path. A genuinely exited CM is cleaned
 up and reported to recovery, with only its own addresses/routes removed.
+After a session has successfully acquired a local address and default route,
+loss of every local address/route path for three consecutive five-second checks
+also ends only that session. Its persistent per-slot worker then redials it.
+This covers a live CM process left behind after netifd loses its route, without
+using another modem's health, a global network restart, or an Internet probe as
+the decision.
 
 ## IPv6 and Wi-Fi/LAN failback
 

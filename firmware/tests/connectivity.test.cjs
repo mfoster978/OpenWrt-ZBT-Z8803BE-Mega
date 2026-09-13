@@ -96,11 +96,33 @@ test('NSA enables LTE anchor before disabling SA and only touches the selected m
   assert.doesNotMatch(commands, /band|ttyMODEM2/);
 });
 test('already-active policy performs no modem write', () => {
-  for (const [mode, rat, policy] of [['0', 'AUTO', 'auto_adaptive'], ['1', 'LTE:NR5G', 'nsa'], ['2', 'AUTO', 'sa']]) {
+  for (const [mode, rat, policy] of [['0', 'AUTO', 'auto'], ['0', 'AUTO', 'auto_adaptive'], ['1', 'LTE:NR5G', 'nsa'], ['2', 'AUTO', 'sa']]) {
     const { out, commands } = apply(radioFixture(mode, rat), policy);
     assert.match(out, /status=0 changed=0/);
     assert.doesNotMatch(commands, /",/);
   }
+});
+test('automatic is the fallback and adaptive mode requires an explicit persistent opt-in marker', () => {
+  const script = radio + `
+config_section=4_1
+uci() {
+  [ "$1" != -q ] || shift
+  case "$1" in
+    get) [ "$2" != qmodem.4_1.zbt_5g_policy ] || printf '%s\\n' "$SAVED" ;;
+    set) printf '%s\\n' "$2" ;;
+    delete) printf 'delete %s\\n' "$2" ;;
+    commit) printf 'commit %s\\n' "$2" ;;
+  esac
+}
+printf 'policy=%s\\n' "$(zbt_5g_policy)"
+zbt_remember_5g_policy auto_adaptive
+zbt_remember_5g_policy auto`;
+  const output = shell(script, { SAVED: 'legacy-or-unknown' });
+  assert.match(output, /^policy=auto$/m);
+  assert.match(output, /qmodem\.4_1\.zbt_5g_policy=auto_adaptive/);
+  assert.match(output, /qmodem\.4_1\.zbt_5g_adaptive_opt_in=1/);
+  assert.match(output, /qmodem\.4_1\.zbt_5g_policy=auto/);
+  assert.match(output, /delete qmodem\.4_1\.zbt_5g_adaptive_opt_in/);
 });
 test('failed reads retry without writing; failed mode write restores prior RAT and selector', () => {
   for (const key of ['nr5g_disable_mode', 'mode_pref']) {

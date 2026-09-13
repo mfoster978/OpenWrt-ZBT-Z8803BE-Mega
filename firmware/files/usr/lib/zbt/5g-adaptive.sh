@@ -4,6 +4,7 @@
 zbt_adaptive_status() { printf '%s\n' "$*" > "$zbt_5g_dir/status"; }
 zbt_adaptive_enabled() {
 	[ "$(zbt_5g_policy)" = auto_adaptive ] &&
+	[ "$(uci -q get "qmodem.$config_section.zbt_5g_adaptive_opt_in")" = 1 ] &&
 	[ "$(uci -q get qmodem.main.enable_dial)" = 1 ] &&
 	[ "$(uci -q get "qmodem.$config_section.enable_dial")" = 1 ] &&
 	[ "$(uci -q get "qmodem.$config_section.state")" = enabled ] &&

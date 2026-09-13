@@ -81,9 +81,9 @@ accounts for radio conditions, carrier aggregation and load. These are
 network-side mechanisms, not evidence that consumer routers all run speed
 tests or that the most bands/strongest signal always wins.
 
-Consequently Mega keeps two distinct choices: **Modem automatic** delegates
-selection without test downloads; **Automatic adaptive** is Mega's own
-bounded end-to-end comparison, not an imitation of a published vendor
+Consequently Mega keeps two distinct choices: **Automatic preferred** is the
+default and delegates selection without test downloads; **Automatic adaptive**
+is Mega's explicitly opted-in bounded end-to-end comparison, not an imitation of a published vendor
 algorithm. Signal/serving mode validates a sample; throughput compares it.
 It cannot guarantee globally optimal performance or predict a different
 mode's throughput without connecting in that mode.

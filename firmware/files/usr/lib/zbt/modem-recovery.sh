@@ -33,7 +33,7 @@ zbt_recovery_action() (
 	read -r owner rest < /proc/self/stat
 	printf '%s\n' "$owner" > "$path"
 	finish() {
-		# A stop during the three-second pulse must never leave power off.
+		# A stop during the eight-second pulse must never leave power off.
 		[ "$powered_off" != 1 ] || printf '1\n' > "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value"
 		[ "$(cat "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value" 2>/dev/null)" != 1 ] || rm -f "$ZBT_RECOVERY_DIR/$section.power-off"
 		rm -f "$path"
@@ -61,7 +61,10 @@ zbt_recovery_action() (
 		printf '%s\n' "$owner" > "$ZBT_RECOVERY_DIR/$section.power-off"
 		printf '0\n' > "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value" || exit 1
 		[ "$(cat "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value")" = 0 ] || exit 1
-		sleep 3
+		# The RM551E live recovery needed a full eight-second low interval.
+		# Shorter pulses can leave its USB/baseband state intact and reproduce
+		# the same dead data path after an apparent power-cycle.
+		sleep 8
 		printf '1\n' > "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value" || exit 1
 		[ "$(cat "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value")" = 1 ] || exit 1
 		powered_off=0

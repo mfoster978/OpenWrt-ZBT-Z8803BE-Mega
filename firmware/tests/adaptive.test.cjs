@@ -35,6 +35,24 @@ test('capability query requires complete explicit support for selector 0,1,2', (
     assert.equal(shell(adaptive + '\nat() { printf \'%s\\n\' "$REPLY"; }; zbt_adaptive_capable && echo supported', { REPLY: '+QNWPREFCFG: "nr5g_disable_mode",' + modes + '\nOK' }), 'supported');
   assert.equal(shell(adaptive + '\nat() { echo ERROR; }; zbt_adaptive_capable || echo deferred'), 'deferred');
 });
+test('background adaptive testing is impossible without an explicit per-modem opt-in', () => {
+  const output = shell(adaptive + `
+config_section=4_1
+zbt_5g_policy() { echo auto_adaptive; }
+uci() {
+  [ "$1" != -q ] || shift
+  [ "$1" = get ] || return 1
+  case "$2" in
+    qmodem.4_1.zbt_5g_adaptive_opt_in) echo "$OPT_IN" ;;
+    qmodem.main.enable_dial|qmodem.4_1.enable_dial) echo 1 ;;
+    qmodem.4_1.state) echo enabled ;;
+    qmodem.4_1.en_bridge) echo 0 ;;
+  esac
+}
+OPT_IN=0; zbt_adaptive_enabled && echo unexpected || echo blocked
+OPT_IN=1; zbt_adaptive_enabled && echo enabled`);
+  assert.equal(output, 'blocked\nenabled');
+});
 test('measurement rejects unstable/failed values and requires all three candidate samples to improve 15%', () => {
   const f = fixture();
   for (const [scores, valid] of [[[100, 102, 110], true], [[100, 101, 300], false], [[0, 100, 101], false], [[100, 100], false]]) {

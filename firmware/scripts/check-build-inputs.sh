@@ -18,6 +18,7 @@ for script in \
   firmware/files/etc/uci-defaults/99-speedify-bootstrap \
   firmware/files/etc/uci-defaults/99-cellular-multiwan-defaults \
   firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v2 \
+  firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v3 \
   firmware/files/etc/hotplug.d/net/15-zbt-rndis-auto \
   firmware/files/etc/hotplug.d/usb/40-zbt-qmodem-autoenable \
   firmware/files/usr/lib/zbt/qmodem-start.sh \
@@ -31,7 +32,11 @@ for script in \
 done
 
 test -x firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v2
+test -x firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v3
+test -x firmware/files/etc/uci-defaults/99-zbt-5g-adaptive-v2
 grep -Fq 'redial_attempts=1' firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v2
+grep -Fq '/etc/init.d/modem_watchdog restart' firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v3
+grep -Fq 'zbt_5g_adaptive_opt_in' firmware/files/etc/uci-defaults/99-zbt-5g-adaptive-v2
 grep -Fq 'action=dialer-exited' firmware/files/usr/lib/zbt/qmodem-start.sh
 grep -Fq 'zbt-qmodem-session-start.lock' firmware/files/usr/lib/zbt/qmodem-start.sh
 
@@ -195,7 +200,13 @@ grep -Fq "return uci.load('qmodem').then" firmware/patches/qmodem-mega-policy-ui
 grep -Fq 'NSA only — LTE-anchored 5G speed comparison' firmware/patches/qmodem-performance-ui.patch
 grep -Fq "name: _('Preferred Bands')" firmware/patches/qmodem-performance-ui.patch
 grep -Fq "''|4_1|2_1|modem1|modem2)" firmware/files/usr/sbin/zbt-qmodem-profile
-grep -Fq 'zbt_5g_policy=auto_adaptive' firmware/files/usr/sbin/zbt-qmodem-profile
+grep -Fq 'zbt_5g_policy=auto' firmware/files/usr/sbin/zbt-qmodem-profile
+grep -Fq 'zbt_5g_adaptive_opt_in=1' firmware/files/usr/lib/zbt/qmodem-5g.sh
+grep -Fq 'sleep 8' firmware/files/usr/lib/zbt/modem-recovery.sh
+grep -Fq '+flock' firmware/feeds/luci-app-modem-watchdog/Makefile
+grep -Fq 'action=worker result=started' firmware/feeds/luci-app-modem-watchdog/root/usr/sbin/modem-watchdog
+grep -Fq 'reason=kernel-data-path-lost' firmware/files/usr/lib/zbt/qmi-session.sh
+grep -Fq 'qmi_kernel_misses" -ge 3' firmware/files/usr/lib/zbt/qmi-session.sh
 test -x firmware/files/usr/sbin/zbt-qmodem-performance-policy
 grep -Fq '. /usr/lib/zbt/qmodem-5g.sh' firmware/files/usr/sbin/zbt-qmodem-performance-policy
 test -x firmware/files/usr/libexec/rpcd/zbt.speedify
@@ -339,7 +350,7 @@ grep -Fq "app.search = 'wsPort=match&wsEndpoint=" \
 if grep -Eq "getRouterActivation|method: 'activation'|Sign in this router" firmware/files/usr/share/zbt/speedify-luci-wrapper.js; then
   echo 'Speedify must use its native sign-in UI' >&2; exit 1
 fi
-for patch_name in qmodem-at-transport-v6.patch qmodem-radio-rpc-v6.patch zbt-qmodem-rpc-firstboot.patch qmodem-session-lifecycle-v7.patch zbt-wifi-firstboot-v7.patch; do
+for patch_name in qmodem-at-transport-v6.patch qmodem-radio-rpc-v6.patch zbt-qmodem-rpc-firstboot.patch qmodem-session-lifecycle-v7.patch qmodem-adaptive-safety-v13.patch zbt-wifi-firstboot-v7.patch; do
   test -s "firmware/patches/$patch_name"
   grep -Fq "$patch_name" firmware/docker/build-openwrt.sh
 done

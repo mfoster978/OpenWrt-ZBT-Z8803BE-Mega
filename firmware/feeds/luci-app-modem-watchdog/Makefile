@@ -1,9 +1,9 @@
 include $(TOPDIR)/rules.mk
 PKG_NAME:=luci-app-modem-watchdog
 PKG_VERSION:=1
-PKG_RELEASE:=5
+PKG_RELEASE:=6
 LUCI_TITLE:=LuCI support for MWAN3 presets, dual-stack modem health and guarded GPIO recovery
-LUCI_DEPENDS:=+luci-base +rpcd +jq +curl
+LUCI_DEPENDS:=+luci-base +rpcd +jq +curl +flock
 include $(TOPDIR)/feeds/luci/luci.mk
 define Package/$(PKG_NAME)/conffiles
 /etc/config/modem_watchdog

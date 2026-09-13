@@ -1,0 +1,9 @@
+#!/bin/sh
+# Ensure the central per-slot health worker is installed in the boot lifecycle
+# after settings-preserving upgrades.  UCI action opt-outs remain authoritative.
+[ "$(uci -q get modem_watchdog.global.recovery_v3 2>/dev/null)" = 1 ] && exit 0
+uci -q set modem_watchdog.global.recovery_v3=1
+uci -q commit modem_watchdog
+/etc/init.d/modem_watchdog enable
+/etc/init.d/modem_watchdog restart >/dev/null 2>&1 || true
+exit 0

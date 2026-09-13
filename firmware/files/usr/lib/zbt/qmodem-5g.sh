@@ -12,12 +12,20 @@ zbt_5g_deployment_name() {
 zbt_5g_policy() {
 	local policy
 	policy=$(uci -q get "qmodem.$config_section.zbt_5g_policy")
-	case "$policy" in auto|nsa|sa) ;; *) policy=auto_adaptive ;; esac
+	case "$policy" in auto_adaptive|auto|nsa|sa) ;; *) policy=auto ;; esac
 	printf '%s\n' "$policy"
 }
 
 zbt_remember_5g_policy() {
-	uci -q set "qmodem.$config_section.zbt_5g_policy=$1" && uci -q commit qmodem
+	uci -q set "qmodem.$config_section.zbt_5g_policy=$1" || return 1
+	if [ "$1" = auto_adaptive ]; then
+		# Background mode changes are never implied by an old/default value.
+		# Only an explicit UI/RPC selection creates this opt-in marker.
+		uci -q set "qmodem.$config_section.zbt_5g_adaptive_opt_in=1" || return 1
+	else
+		uci -q delete "qmodem.$config_section.zbt_5g_adaptive_opt_in" 2>/dev/null || true
+	fi
+	uci -q commit qmodem
 }
 
 zbt_5g_parse() {
@@ -149,7 +157,7 @@ zbt_get_5g_deployment() {
 zbt_set_5g_deployment() {
 	local requested="$1" status=0
 	. /usr/lib/zbt/5g-state.sh
-	[ "$requested" != auto_preferred ] || requested=auto_adaptive
+	[ "$requested" != auto_preferred ] || requested=auto
 	zbt_5g_message='Automatic comparison is in progress. Retry after it finishes; no setting was changed.'
 	if zbt_5g_lock; then
 	if zbt_5g_apply "$requested"; then
