@@ -17,7 +17,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mfoster978/OpenWrt-ZBT-Z8803BE-Mega/actions/workflows/build-openwrt-firmware.yml"><img alt="Firmware build" src="https://github.com/mfoster978/OpenWrt-ZBT-Z8803BE-Mega/actions/workflows/build-openwrt-firmware.yml/badge.svg"></a>
+  <a href="https://github.com/mfoster978/OpenWrt-ZBT-Z8803BE-Mega/releases/latest"><img alt="Latest published Mega release" src="https://img.shields.io/github/v/release/mfoster978/OpenWrt-ZBT-Z8803BE-Mega?label=Mega%20release"></a>
+  <a href="https://github.com/mfoster978/OpenWrt-ZBT-Z8803BE-Mega/actions/workflows/publish-local-release.yml?query=branch%3Amaster"><img alt="Local firmware validation and publication" src="https://github.com/mfoster978/OpenWrt-ZBT-Z8803BE-Mega/actions/workflows/publish-local-release.yml/badge.svg?branch=master&amp;event=workflow_dispatch"></a>
+  <a href="https://github.com/mfoster978/OpenWrt-ZBT-Z8803BE-Mega/actions/workflows/sanity.yml?query=branch%3Amaster"><img alt="Source checks (not firmware compilation)" src="https://github.com/mfoster978/OpenWrt-ZBT-Z8803BE-Mega/actions/workflows/sanity.yml/badge.svg?branch=master&amp;event=push"></a>
   <img alt="OpenWrt 25.12.2" src="https://img.shields.io/badge/OpenWrt-25.12.2-00B5E2?logo=openwrt&logoColor=white">
   <img alt="Linux 6.12.74" src="https://img.shields.io/badge/Linux-6.12.74-FCC624?logo=linux&logoColor=black">
   <img alt="Target MediaTek Filogic" src="https://img.shields.io/badge/target-MediaTek%20Filogic-ED1C24">
@@ -414,6 +416,8 @@ A clean Mega installation has no shared `admin` password. Open `http://192.168.1
 
 ### GitHub Actions
 
+This is the optional [GitHub-hosted compilation workflow](https://github.com/mfoster978/OpenWrt-ZBT-Z8803BE-Mega/actions/workflows/build-openwrt-firmware.yml). Its last result is independent of locally built releases: a failed hosted run does not describe a later image built locally and published through **Publish locally built firmware**. Both workflows retain their full run history in Actions.
+
 Open **Actions → Build OpenWrt Firmware → Run workflow**. The workflow accepts:
 
 | Input | Purpose | Default |
@@ -477,7 +481,9 @@ The same host should have roughly 40–50 GiB available for a clean build. More 
 
 ## Validation model
 
-A green **firmware build** confirms the following build-time checks (the separate Sanity workflow does not compile firmware):
+The header badges show the latest published **Mega release**, the latest **Publish locally built firmware** run on `master`, and **Sanity** source checks on `master`. Publication verifies the uploaded image assets, checksums and source identity; it does not compile firmware again. Sanity does not compile firmware either. Neither badge certifies physical-router behavior.
+
+A successful **Build OpenWrt Firmware** run confirms the following build-time checks:
 
 - source URL, tag, commit, device target, and required configuration symbols;
 - reviewed Speedify downloads and pinned SHA256 values;
