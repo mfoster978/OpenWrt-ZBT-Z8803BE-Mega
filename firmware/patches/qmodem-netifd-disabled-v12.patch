@@ -1,0 +1,23 @@
+--- a/application/qmodem/files/usr/share/qmodem/modem_dial.sh
++++ b/application/qmodem/files/usr/share/qmodem/modem_dial.sh
+@@ -786,15 +786,18 @@
+         uci -q set network.${interface_name}=interface
+         for logical in "$interface_name" "$interface6_name"; do
+             uci -q get network.$logical >/dev/null || continue
+-            qmi_current="$(uci -q get network.$logical.proto):$(uci -q get network.$logical.modem_config):$(uci -q get network.$logical.device):$(uci -q get network.$logical.ifname):$(uci -q get network.$logical.auto)"
+-            if [ "$qmi_current" != "zbtqmi:$modem_config:$target_netcard:$target_netcard:1" ]; then
++            qmi_current="$(uci -q get network.$logical.proto):$(uci -q get network.$logical.modem_config):$(uci -q get network.$logical.device):$(uci -q get network.$logical.ifname):$(uci -q get network.$logical.auto):$(uci -q get network.$logical.disabled)"
++            if [ "$qmi_current" != "zbtqmi:$modem_config:$target_netcard:$target_netcard:1:" ]; then
+                 uci -q set network.$logical.proto=zbtqmi
+                 uci -q set network.$logical.modem_config="$modem_config"
+                 uci -q set network.$logical.device="$target_netcard"
+                 uci -q set network.$logical.ifname="$target_netcard"
+                 # Keep a live supervised data session armed across unrelated
+                 # network reloads. Without this, netifd returns to disabled.
+                 uci -q set network.$logical.auto=1
++                # A retained disabled=1 prevents netifd from creating the
++                # logical interface at all, regardless of auto or ifup.
++                uci -q delete network.$logical.disabled 2>/dev/null || true
+                 interface_update_flag=1
+             fi
+         done

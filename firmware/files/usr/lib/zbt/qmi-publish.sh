@@ -68,18 +68,75 @@ EOF
 	[ -n "$(ip -"$family" route show table main default dev "$modem_netcard" 2>/dev/null)" ]
 }
 
+# Repair only the generated netifd identity for a proven, currently supervised
+# CM session. In particular, option disabled '1' makes netifd omit the UCI
+# interface object completely; requiring that object before repair is circular.
+zbt_qmi_repair_netifd_config() {
+	local interface="$1" family="$2" modem_config="$3" modem_netcard="$4"
+	local proto changed=0 metric option
+	case "$interface:$family:$modem_config" in
+		4_1:4:4_1|4_1v6:6:4_1|2_1:4:2_1|2_1v6:6:2_1) ;;
+		*) return 1 ;;
+	esac
+	proto=$(uci -q get "network.$interface.proto")
+	case "$proto" in
+		zbtqmi|none) ;;
+		'')
+			uci -q set "network.$interface=interface"
+			uci -q set "network.$interface.proto=zbtqmi"
+			proto=zbtqmi
+			changed=1
+			;;
+		*) return 1 ;;
+	esac
+	if [ "$(uci -q get "network.$interface.modem_config")" != "$modem_config" ]; then
+		uci -q set "network.$interface.modem_config=$modem_config"
+		changed=1
+	fi
+	for option in device ifname; do
+		if [ "$(uci -q get "network.$interface.$option")" != "$modem_netcard" ]; then
+			uci -q set "network.$interface.$option=$modem_netcard"
+			changed=1
+		fi
+	done
+	if [ "$(uci -q get "network.$interface.auto")" != 1 ]; then
+		uci -q set "network.$interface.auto=1"
+		changed=1
+	fi
+	# Delete both retained disabled=1 and legacy disabled=0. Absence is the
+	# canonical netifd representation for an enabled generated interface.
+	if uci -q get "network.$interface.disabled" >/dev/null 2>&1; then
+		uci -q delete "network.$interface.disabled"
+		changed=1
+	fi
+	metric=$(uci -q get "network.$interface.metric")
+	if [ -z "$metric" ]; then
+		metric=200; [ "$modem_config" != 2_1 ] || metric=210
+		uci -q set "network.$interface.metric=$metric"
+		changed=1
+	fi
+	ZBT_QMI_CONFIG_REPAIRED=$changed
+	[ "$changed" = 1 ] || return 0
+	uci -q commit network || return 1
+	ubus -t 15 call network reload >/dev/null 2>&1 || return 1
+	logger -t zbt-mwan-reconcile "iface=$interface family=$family device=$modem_netcard evidence=supervised_cm_address_route action=clear_stale_netifd_disabled result=committed"
+}
+
 # Re-publish an already working CM data path after a missed netifd update.
 # Never start a QModem-disabled interface or touch modem/radio settings.
 zbt_qmi_reconcile_publication() (
-	local modem_config="$1" family="$2" modem_netcard="$3" qmi_ifindex="$4" interface status proto
+	local modem_config="$1" family="$2" modem_netcard="$3" qmi_ifindex="$4" interface status proto attempt
 	interface=$modem_config
 	[ "$family" != 6 ] || interface=${modem_config}v6
-	proto=$(uci -q get "network.$interface.proto")
-	case "$proto" in zbtqmi|none) ;; *) return 1 ;; esac
-	[ "$(uci -q get "network.$interface.modem_config")" = "$modem_config" ] || return 1
-	status=$(ubus -t 3 call "network.interface.$interface" status) || return 1
-	printf '%s' "$status" | jq -e '.available == true' >/dev/null || return 1
 	zbt_qmi_session_active "$modem_config" "$family" "$modem_netcard" "$qmi_ifindex" || return 1
+	exec 1002>/var/lock/zbt-qmi-netifd.lock
+	flock -w 10 1002 || return 1
+	# Recheck ownership after waiting for the dialer's shared lock. Only that
+	# live session can authorize removal of a stale generated disabled flag.
+	zbt_qmi_session_active "$modem_config" "$family" "$modem_netcard" "$qmi_ifindex" || return 1
+	ZBT_QMI_CONFIG_REPAIRED=0
+	zbt_qmi_repair_netifd_config "$interface" "$family" "$modem_config" "$modem_netcard" || return 1
+	proto=$(uci -q get "network.$interface.proto")
 	zbt_qmi_owned() {
 		zbt_qmi_session_active "$modem_config" "$family" "$modem_netcard" "$qmi_ifindex"
 	}
@@ -88,14 +145,22 @@ zbt_qmi_reconcile_publication() (
 	# administrative authority for these generated logical interfaces. The
 	# stock ifup helper performs a global reload before a targeted up and can
 	# leave one of two concurrent modems down while its CM path keeps working.
-	if ! printf '%s' "$status" | jq -e '.autostart == true and (.up == true or .pending == true)' >/dev/null; then
+	status=$(ubus -t 3 call "network.interface.$interface" status 2>/dev/null || true)
+	if ! printf '%s' "$status" | jq -e '.available == true and .autostart == true and (.up == true or .pending == true)' >/dev/null; then
 		[ "$(uci -q get qmodem.main.enable_dial)" = 1 ] || return 1
 		[ "$(uci -q get "qmodem.$modem_config.enable_dial")" = 1 ] || return 1
 		[ "$(uci -q get "qmodem.$modem_config.state")" != disabled ] || return 1
 		[ "$(uci -q get "qmodem.$modem_config.en_bridge")" != 1 ] || return 1
-		ubus -t 5 call network.interface up "{\"interface\":\"$interface\"}" >/dev/null 2>&1 || return 1
-		status=$(ubus -t 3 call "network.interface.$interface" status) || return 1
-		printf '%s' "$status" | jq -e '.autostart == true and (.up == true or .pending == true)' >/dev/null || return 1
+		# A reload that just introduced a formerly disabled section can take a
+		# moment to register its ubus object. Bound the wait; periodic reconcile
+		# will retry without altering WAN state if netifd remains unavailable.
+		for attempt in 1 2 3 4 5; do
+			ubus -t 5 call network.interface up "{\"interface\":\"$interface\"}" >/dev/null 2>&1 || true
+			status=$(ubus -t 3 call "network.interface.$interface" status 2>/dev/null || true)
+			printf '%s' "$status" | jq -e '.available == true and .autostart == true and (.up == true or .pending == true)' >/dev/null && break
+			sleep 1
+		done
+		printf '%s' "$status" | jq -e '.available == true and .autostart == true and (.up == true or .pending == true)' >/dev/null || return 1
 		logger -t zbt-mwan-reconcile "iface=$interface family=$family device=$modem_netcard evidence=supervised_cm_address_route action=rearm_generated_interface result=verified"
 	fi
 	# Older settings-preserving installs used proto=none with CM owning the

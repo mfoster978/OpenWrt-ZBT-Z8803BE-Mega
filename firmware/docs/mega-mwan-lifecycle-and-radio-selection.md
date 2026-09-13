@@ -130,8 +130,9 @@ device-bound HTTPS 204 fallback when a cellular path drops ICMP.
 the image's protocol libraries: backup first, primary pending with live CM
 addresses, IPv4/IPv6 publication recovery, no repeated notifications,
 unrelated network reload survival, explicit-QModem-disable preservation, and
-the reported legacy `proto=none` plus `autostart=false` recovery while backup
-stays online. `mwan-apply.test.cjs` verifies lock-safe, rate-limited restart of
+the reported retained `network.4_1.disabled=1` state (where direct modem tests
+work but netifd omits Modem 1), plus legacy `proto=none` and `autostart=false`
+recovery while backup stays publishable. `mwan-apply.test.cjs` verifies lock-safe, rate-limited restart of
 a tracker that remains paused after targeted recovery.
 The separate isolated `lan-policy-kernel.sh` test sends real IPv4/IPv6 packets
 from bridged veth clients through the pinned policy builder and reconciler;

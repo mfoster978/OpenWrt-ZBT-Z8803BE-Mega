@@ -10,7 +10,7 @@ const root = path.resolve(__dirname, '../..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'zbt-pinned-patches-'));
 const specs = [
   ['qmodem-firstboot', '0xFar5eer/openwrt25.12_ZBT_Z8803BE', 'edc738504fe8fae81eb15de967456204699b1830', 'zbt-qmodem-rpc-firstboot.patch', ''],
-  ['qmodem', 'FUjr/QModem', 'a8b8a63e5b0853c79d2ad3f1ebbb673a724872bf', ['qmodem-dual-runtime.patch', 'qmodem-cell-discovery.patch', 'qmodem-5g-deployment.patch', 'qmodem-performance-ui.patch', 'qmodem-mega-policy-ui.patch', 'qmodem-connectivity-v5.patch', 'qmodem-at-transport-v6.patch', 'qmodem-radio-rpc-v6.patch', 'qmodem-session-lifecycle-v7.patch', 'qmodem-adaptive-v8.patch', 'qmodem-health-v9.patch', 'qmodem-netifd-serialization-v10.patch', 'qmodem-netifd-arming-v11.patch'], ''],
+  ['qmodem', 'FUjr/QModem', 'a8b8a63e5b0853c79d2ad3f1ebbb673a724872bf', ['qmodem-dual-runtime.patch', 'qmodem-cell-discovery.patch', 'qmodem-5g-deployment.patch', 'qmodem-performance-ui.patch', 'qmodem-mega-policy-ui.patch', 'qmodem-connectivity-v5.patch', 'qmodem-at-transport-v6.patch', 'qmodem-radio-rpc-v6.patch', 'qmodem-session-lifecycle-v7.patch', 'qmodem-adaptive-v8.patch', 'qmodem-health-v9.patch', 'qmodem-netifd-serialization-v10.patch', 'qmodem-netifd-arming-v11.patch', 'qmodem-netifd-disabled-v12.patch'], ''],
   ['wifi-firstboot', '0xFar5eer/openwrt25.12_ZBT_Z8803BE', 'edc738504fe8fae81eb15de967456204699b1830', 'zbt-wifi-firstboot-v7.patch', ''],
   ['packages', 'openwrt/packages', 'db3b315119519f9194dad8aa668aa40618df9b20', ['mwan3-speed-policy.patch', 'mwan3-mega-lifecycle.patch'], ''],
   ['mwan3-luci', 'openwrt/luci', 'a611522a2bfc24ca2625e8cd2fcc9404288532a6', 'luci-app-mwan3-route-metric.patch', ''],

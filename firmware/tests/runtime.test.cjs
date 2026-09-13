@@ -618,6 +618,7 @@ test('dual QMI startup stays armed across reloads, serializes netifd loading and
   const setIf = dialer.slice(dialer.indexOf('\nset_if()') + 1, dialer.indexOf('\nflush_if()'));
   assert.match(setIf, /exec 1002>\/var\/lock\/zbt-qmi-netifd\.lock\s+flock 1002/);
   assert.match(setIf, /uci -q set network\.\$logical\.auto=1/);
+  assert.match(setIf, /uci -q delete network\.\$logical\.disabled 2>\/dev\/null \|\| true/);
   assert.match(setIf, /ubus -t 15 call network reload[\s\S]*ubus -t 5 call network\.interface up/);
   assert.match(setIf, /idempotent and never reloads or changes the peer modem[\s\S]*ubus -t 5 call network\.interface up/);
   assert.ok(setIf.indexOf('flock 1002') < setIf.indexOf('uci commit network'));
@@ -631,8 +632,10 @@ test('dual QMI startup stays armed across reloads, serializes netifd loading and
   const apply = file('firmware/files/usr/sbin/zbt-mwan-apply');
   assert.match(apply, /flock -u 1000[\s\S]*\/etc\/init\.d\/mwan3 restart/);
   assert.match(apply, /enabled_supervised_session_tracker_paused/);
-  const migration = file('firmware/files/etc/uci-defaults/99-zbt-qmi-netifd-v11');
-  assert.match(migration, /network\.\$section\.auto=1/);
+  const migration = file('firmware/files/etc/uci-defaults/99-zbt-qmi-netifd-v12');
+  assert.match(migration, /network\.\$interface\.auto=1/);
+  assert.match(migration, /delete "network\.\$interface\.disabled"/);
+  assert.match(migration, /ZBT_MWAN_NO_RELOAD=1 \/usr\/sbin\/zbt-mwan-preset/);
 });
 
 test('MWAN3 interface UI edits the persistent network metric', { skip: !process.env.MWAN3_LUCI_TEST_TREE }, () => {

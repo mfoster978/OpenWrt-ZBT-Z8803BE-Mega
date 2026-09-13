@@ -1,0 +1,53 @@
+#!/bin/sh
+set -eu
+
+[ "$(uci -q get system.zbt_qmi_netifd.version 2>/dev/null || true)" = 12 ] && exit 0
+
+# Reapply only a firmware-managed routing policy. This repairs a retained
+# mwan3.<slot>.enabled=0 without replacing a genuinely custom policy.
+preset=$(uci -q get modem_watchdog.global.routing_preset 2>/dev/null || true)
+case "$preset" in
+	fastest) preset=failover ;;
+esac
+case "$preset" in
+	priority|failover)
+		ZBT_MWAN_NO_RELOAD=1 /usr/sbin/zbt-mwan-preset "$preset"
+		;;
+esac
+
+for section in 4_1 2_1; do
+	if ! uci -q get "network.$section" >/dev/null 2>&1; then
+		metric=200; [ "$section" != 2_1 ] || metric=210
+		uci set "network.$section=interface"
+		uci set "network.$section.proto=none"
+		uci set "network.$section.metric=$metric"
+	fi
+	uci set "network.$section.modem_config=$section"
+	enabled=1
+	if [ "$(uci -q get qmodem.main.enable_dial 2>/dev/null || true)" = 0 ] ||
+		[ "$(uci -q get "qmodem.$section.enable_dial" 2>/dev/null || true)" = 0 ] ||
+		[ "$(uci -q get "qmodem.$section.state" 2>/dev/null || true)" = disabled ] ||
+		[ "$(uci -q get "qmodem.$section.en_bridge" 2>/dev/null || true)" = 1 ]; then
+		enabled=0
+	fi
+	for interface in "$section" "${section}v6"; do
+		uci -q get "network.$interface" >/dev/null 2>&1 || continue
+		uci set "network.$interface.modem_config=$section"
+		if [ "$enabled" = 1 ]; then
+			uci set "network.$interface.auto=1"
+			# option disabled is stronger than auto and causes netifd to omit
+			# the interface, even while its physical CM session is online.
+			uci -q delete "network.$interface.disabled" 2>/dev/null || true
+		else
+			uci set "network.$interface.auto=0"
+		fi
+	done
+done
+
+uci set system.zbt_qmi_netifd=runtime_defaults
+uci set system.zbt_qmi_netifd.version=12
+uci commit network
+uci commit system
+[ ! -x /etc/init.d/modem_watchdog ] || /etc/init.d/modem_watchdog enable
+[ ! -x /etc/init.d/qmodem_network ] || /etc/init.d/qmodem_network enable
+exit 0

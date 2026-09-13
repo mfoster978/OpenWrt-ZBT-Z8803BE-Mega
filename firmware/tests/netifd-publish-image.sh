@@ -125,9 +125,34 @@ ubus call network.interface.2_1 status | jq -e '.up==true and .["ipv4-address"][
 ubus call network.interface.2_1v6 status | jq -e '.up==true' >/dev/null
 echo 'PASS: a live QModem session re-arms stale netifd down; a disabled QModem remains down and backup stays online'
 uci set qmodem.4_1.enable_dial=1
+# Reproduce the retained configuration from the field report. netifd does not
+# parse an interface carrying disabled=1, even though CM still owns a working
+# address/default route and the device-bound speed test therefore succeeds.
+uci set network.4_1.disabled=1
+uci commit qmodem
+uci commit network
+ubus call network reload >/dev/null
+sleep 1
+if ubus -t 2 call network.interface.4_1 status >/dev/null 2>&1; then
+	echo 'disabled=1 interface unexpectedly survived native netifd reload' >&2
+	exit 1
+fi
+ip addr replace 192.0.0.2/27 dev qmitest
+ip route replace default via 192.0.0.1 dev qmitest metric 200
+zbt_qmi_reconcile_publication 4_1 4 qmitest "$qmi_ifindex"
+if uci -q get network.4_1.disabled >/dev/null 2>&1; then
+	echo 'live repair left the netifd disabled option behind' >&2
+	exit 1
+fi
+[ "$(uci -q get network.4_1.auto)" = 1 ]
+ubus call network.interface.4_1 status | jq -e '.up==true and .autostart==true and .l3_device=="qmitest" and .["ipv4-address"][0].address=="192.0.0.2"' >/dev/null
+# The peer CM loop normally republishes within five seconds after the required
+# global config reload. Exercise that same reconciliation explicitly here.
+zbt_qmi_reconcile_publication 2_1 4 qmitest2 "$backup_index"
+ubus call network.interface.2_1 status | jq -e '.up==true and .["ipv4-address"][0].address=="10.233.98.190"' >/dev/null
+echo 'PASS: retained network.4_1.disabled=1 is removed only for its verified live CM session; Modem 1 returns to netifd and backup remains publishable'
 uci set network.4_1.proto=none
 uci set network.4_1.device=qmitest
-uci commit qmodem
 uci commit network
 ubus call network reload >/dev/null
 ubus call network.interface.4_1 down >/dev/null

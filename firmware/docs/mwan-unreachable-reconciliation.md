@@ -43,6 +43,13 @@ not that end-user connectivity has been independently verified.
 
 The reconciliation runs with the existing health loop (normally 30 seconds
 plus probe time), including when automatic destructive recovery is disabled.
+For a supervised live QMI session, it also clears a retained generated
+`network.<slot>.disabled` option before retrying publication. That option makes
+netifd omit the logical interface completely, so setting `auto=1` or sending a
+targeted `ifup` alone cannot repair it. Explicit QModem disable/bridge state is
+still authoritative and is never overridden. Firmware-managed priority and
+failover presets re-enable both MWAN trackers during the v12 upgrade migration;
+custom routing policies remain untouched.
 The built-image guard requires the library and compares it and the entry point
 byte-for-byte. The watchdog package release is incremented for its changed worker.
 
