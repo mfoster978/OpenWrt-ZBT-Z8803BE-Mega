@@ -1,12 +1,15 @@
 #!/bin/sh
-# Re-evaluate policies without restarting interfaces, rewriting flash, or
-# erasing the user's uncommitted UCI changes.
+# Repair healthy-tracker/unreachable-policy drift without restarting WANs.
 . /lib/functions.sh
 . /lib/functions/network.sh
 . /lib/mwan3/mwan3.sh
-initscript=/etc/init.d/mwan3
-. /lib/functions/procd.sh
+. /usr/lib/zbt/mwan-runtime.sh
+. /usr/lib/zbt/modem-health.sh
+. /usr/lib/zbt/mwan-reconcile.sh
+# Do not wait behind startup, an attended reload, or a hotplug event.
+exec 1000>/var/lock/procd_mwan3.lock
+flock -n 1000 || exit 0
 /etc/init.d/mwan3 running >/dev/null 2>&1 || exit 0
-procd_lock
+[ -z "$(uci -q changes mwan3)$(uci -q changes network)" ] || exit 0
 mwan3_init
-mwan3_set_policies_iptables
+zbt_mwan_reconcile

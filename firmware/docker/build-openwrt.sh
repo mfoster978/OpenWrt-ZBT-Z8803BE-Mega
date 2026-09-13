@@ -596,6 +596,7 @@ required_overlay_files=(
   usr/lib/zbt/5g-state.sh
   usr/lib/zbt/5g-adaptive.sh
   usr/lib/zbt/mwan-runtime.sh
+  usr/lib/zbt/mwan-reconcile.sh
   usr/sbin/zbt-mwan-failback
   usr/sbin/zbt-5g-adaptive
   etc/init.d/zbt-5g-adaptive
@@ -659,7 +660,7 @@ for overlay_file in "${required_overlay_files[@]}"; do
   fi
 done
 echo "Validated files overlay in root filesystem: ${rootfs_dir}"
-for component in usr/sbin/zbt-5g-adaptive usr/sbin/zbt-mwan-failback usr/sbin/conntrack usr/bin/util-linux-flock; do
+for component in usr/sbin/zbt-mwan-apply usr/sbin/zbt-5g-adaptive usr/sbin/zbt-mwan-failback usr/sbin/conntrack usr/bin/util-linux-flock; do
   test -x "${rootfs_dir}/$component" || { echo "Missing adaptive/failback executable: $component" >&2; exit 4; }
 done
 [ "$(readlink "${rootfs_dir}/etc/rc.d/S99zbt-5g-adaptive")" = ../init.d/zbt-5g-adaptive ] || {
@@ -669,7 +670,7 @@ grep -Fq 'Automatic adaptive — measured SA/NSA preference' \
   "${rootfs_dir}/www/luci-static/resources/view/qmodem/config_advanced.js" || exit 4
 test -x "${rootfs_dir}/usr/sbin/zbt-speedify-guard" &&
   test -x "${rootfs_dir}/etc/init.d/zbt-speedify-guard" || exit 4
-for overlay_file in usr/lib/zbt/5g-state.sh usr/lib/zbt/5g-adaptive.sh usr/lib/zbt/mwan-runtime.sh usr/sbin/zbt-mwan-failback usr/sbin/zbt-5g-adaptive etc/init.d/zbt-5g-adaptive etc/hotplug.d/iface/90-zbt-mwan-failback etc/uci-defaults/99-zbt-5g-adaptive-v1 usr/lib/zbt/qmodem-5g.sh usr/lib/zbt/qmi-session.sh usr/sbin/zbt-wifi-firstboot etc/init.d/zbt-wifi-firstboot etc/uci-defaults/71-zbt-wifi-firstboot usr/lib/zbt/mwan3-speed-metric.sh usr/libexec/rpcd/zbt.speedify usr/share/rpcd/acl.d/zbt-speedify.json usr/share/zbt/speedify-luci-wrapper.js usr/lib/zbt/speedify-routing.sh usr/sbin/zbt-speedify-guard etc/init.d/zbt-speedify-guard etc/uci-defaults/99-zbt-modem-route-v5; do
+for overlay_file in usr/lib/zbt/mwan-reconcile.sh usr/sbin/zbt-mwan-apply usr/lib/zbt/5g-state.sh usr/lib/zbt/5g-adaptive.sh usr/lib/zbt/mwan-runtime.sh usr/sbin/zbt-mwan-failback usr/sbin/zbt-5g-adaptive etc/init.d/zbt-5g-adaptive etc/hotplug.d/iface/90-zbt-mwan-failback etc/uci-defaults/99-zbt-5g-adaptive-v1 usr/lib/zbt/qmodem-5g.sh usr/lib/zbt/qmi-session.sh usr/sbin/zbt-wifi-firstboot etc/init.d/zbt-wifi-firstboot etc/uci-defaults/71-zbt-wifi-firstboot usr/lib/zbt/mwan3-speed-metric.sh usr/libexec/rpcd/zbt.speedify usr/share/rpcd/acl.d/zbt-speedify.json usr/share/zbt/speedify-luci-wrapper.js usr/lib/zbt/speedify-routing.sh usr/sbin/zbt-speedify-guard etc/init.d/zbt-speedify-guard etc/uci-defaults/99-zbt-modem-route-v5; do
   cmp "${FILES_OVERLAY_DIR}/${overlay_file}" "${rootfs_dir}/${overlay_file}" || exit 4
 done
 # Check the actual installed dialer and authoritative board defaults, not

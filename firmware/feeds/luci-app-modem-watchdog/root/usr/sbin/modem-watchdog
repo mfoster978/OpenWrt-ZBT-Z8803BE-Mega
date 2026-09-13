@@ -23,6 +23,9 @@ while :; do
 		) &
 	done
 	/usr/sbin/zbt-modem-led-poller once >/dev/null 2>&1
+	# Direct modem tests can pass while the installed failover policy rejects
+	# all clients. Let MWAN3 reconcile its own runtime state before session cleanup.
+	/usr/sbin/zbt-mwan-apply
 	# A connected hotplug can precede the tracker's first TIME publication.
 	# Retry verified failback after that race, for Ethernet and Wi-Fi alike.
 	/usr/sbin/zbt-mwan-failback "$(zbt_mwan_winner)"
