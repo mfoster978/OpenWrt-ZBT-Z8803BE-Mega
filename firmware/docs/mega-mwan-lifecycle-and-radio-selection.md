@@ -12,6 +12,18 @@ cannot be established from the status text alone.
 
 The source audit found and addressed these concrete failure paths:
 
+* Follow-up dump: a kernel CM default route can exist while MWAN table 3
+  and its rules are absent. Reconciliation previously required netifd to
+  already be up, so it could never repair a missed CM publication itself.
+  The health worker now re-publishes observed addresses/default routes for
+  owned `zbtqmi` interfaces that are up or pending and autostart-enabled,
+  then verifies netifd readback before the existing MWAN tracker refresh.
+  Physical ownership, fresh direct health and family are checked first.
+  Administrative stops, disabled tracking and pending configuration edits
+  remain untouched. Repeated checks do not emit repeated notifications.
+  This closes a reproduced recovery gap; the dump alone does not establish
+  whether the affected router has this state or an explicitly disabled UCI
+  setting. Neither state is inferred from the MWAN word `disabled` alone.
 * MWAN3's generic resolver prefers an existing `4_1_4` dynamic child even
   when it is down and the base interface is up. Mega's explicitly owned
   `zbtqmi` interfaces now resolve to the exact parent where CM publishes.
@@ -90,6 +102,10 @@ guard with controlled netifd/procd inputs, including both slots and families.
 `adaptive.test.cjs` covers candidate withdrawal, sampling-before-resume,
 backup loss, IPv6 requirements, cooldowns, rollback and command binding.
 `modem-health.test.cjs` exercises failed publication readback and idempotence.
+`netifd-publish-image.sh` runs the pinned native netifd/ubus/UCI builds with
+the image's protocol libraries: backup first, primary pending with live CM
+addresses, IPv4/IPv6 publication recovery, no repeated notifications,
+unhealthy-path refusal, and preservation of administrative stops and backup.
 The separate isolated `lan-policy-kernel.sh` test sends real IPv4/IPv6 packets
 from bridged veth clients through the pinned policy builder and reconciler;
 veth clients model Ethernet/Wi-Fi forwarding, not physical radio hardware.

@@ -5,6 +5,7 @@
 . /lib/mwan3/mwan3.sh
 . /usr/lib/zbt/mwan-runtime.sh
 . /usr/lib/zbt/modem-health.sh
+. /usr/lib/zbt/qmi-publish.sh
 . /usr/lib/zbt/mwan-reconcile.sh
 # Do not wait behind startup, an attended reload, or a hotplug event.
 exec 1000>/var/lock/procd_mwan3.lock

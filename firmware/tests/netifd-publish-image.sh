@@ -16,16 +16,19 @@ cp "$MEGA_TEST_ROOTFS/lib/netifd/netifd-proto.sh" "$MEGA_TEST_ROOTFS/lib/netifd/
 cp "$MEGA_TEST_REPO/firmware/files/lib/netifd/proto/zbtqmi.sh" "$fixture/addons/proto/"
 for name in ubus uci jshn; do install -m 755 "$MEGA_TEST_REPO/firmware/tests/image-tool-wrapper" "/usr/local/bin/$name"; done
 touch "$MEGA_TEST_CONFIG/network"
-for interface in 4_1 4_1v6; do
+for interface in 4_1 4_1v6 2_1 2_1v6; do
+	case "$interface" in 4_1*) slot=4_1; device=qmitest ;; *) slot=2_1; device=qmitest2 ;; esac
 	uci set "network.$interface=interface"
-	uci set "network.$interface.device=qmitest"
+	uci set "network.$interface.device=$device"
 	uci set "network.$interface.proto=zbtqmi"
-	uci set "network.$interface.modem_config=4_1"
+	uci set "network.$interface.modem_config=$slot"
 	uci set "network.$interface.metric=200"
 done
 uci commit network
 ip link add qmitest type dummy
 ip link set qmitest up
+ip link add qmitest2 type dummy
+ip link set qmitest2 up
 run_image() {
 	program="$1"; shift
 	if [ "${MEGA_NATIVE_NETIFD:-0}" = 1 ]; then
@@ -45,13 +48,48 @@ ip addr add 192.0.0.2/27 dev qmitest
 ip route add default via 192.0.0.1 dev qmitest metric 200
 ip -6 addr add 2001:db8:1::2/64 dev qmitest nodad
 ip -6 route add default via 2001:db8:1::1 dev qmitest metric 200
+ip addr add 10.233.98.190/30 dev qmitest2
+ip route add default via 10.233.98.189 dev qmitest2 metric 210
+ip -6 addr add 2001:db8:2::2/64 dev qmitest2 nodad
+ip -6 route add default via 2001:db8:2::1 dev qmitest2 metric 210
 . "$MEGA_TEST_REPO/firmware/files/usr/lib/zbt/qmi-publish.sh"
 modem_config=4_1; modem_netcard=qmitest
 zbt_qmi_owned() { [ "$(ip -o link show dev qmitest | cut -d: -f2 | tr -d ' ')" = qmitest ]; }
-zbt_qmi_publish 4 4_1 || { cat "$fixture/netifd.log"; exit 1; }
-zbt_qmi_publish 6 4_1v6 || { cat "$fixture/netifd.log"; exit 1; }
+# The original CM supervisor has missed its notification. Exercise the
+# independent repair against real netifd in pending/down state, not a stub.
+zbt_netdev() { case "$1" in 4_1) echo qmitest ;; 2_1) echo qmitest2 ;; esac; }
+zbt_health_online() { [ "${TEST_HEALTH:-online}" = online ]; }
+qmi_ifindex=$(cat /sys/class/net/qmitest/ifindex)
+backup_index=$(cat /sys/class/net/qmitest2/ifindex)
+# Backup comes up first, as on the reported router.
+zbt_qmi_reconcile_publication 2_1 4 qmitest2 "$backup_index"
+zbt_qmi_reconcile_publication 2_1 6 qmitest2 "$backup_index"
+TEST_HEALTH=offline
+if zbt_qmi_reconcile_publication 4_1 4 qmitest "$qmi_ifindex"; then exit 1; fi
+ubus call network.interface.4_1 status | jq -e '.up==false' >/dev/null
+TEST_HEALTH=online
+zbt_qmi_reconcile_publication 4_1 4 qmitest "$qmi_ifindex"
+zbt_qmi_reconcile_publication 4_1 6 qmitest "$qmi_ifindex"
 ubus call network.interface.4_1 status | jq -e '.up==true and .["ipv4-address"][0].address=="192.0.0.2" and .route[0].nexthop=="192.0.0.1"'
 ubus call network.interface.4_1v6 status | jq -e '.up==true and .["ipv6-address"][0].address=="2001:db8:1::2"'
 ip -o addr show dev qmitest | grep -q '192.0.0.2/27'
 ip -o -6 addr show dev qmitest | grep -q '2001:db8:1::2/64'
 echo "PASS: netifd/ubus/UCI (native pinned build=${MEGA_NATIVE_NETIFD:-0}) accepts external QMI IPv4 and IPv6 publication; initially down, then correct source addresses/routes visible"
+# Repeating repair must not emit another protocol notification.
+ubus() {
+	case "$*" in *notify_proto*) echo 'unexpected repeated publication' >&2; return 99;; esac
+	/usr/local/bin/ubus "$@"
+}
+zbt_qmi_reconcile_publication 4_1 4 qmitest "$qmi_ifindex"
+zbt_qmi_reconcile_publication 4_1 6 qmitest "$qmi_ifindex"
+unset -f ubus
+echo 'PASS: repeated repair emits no notify_proto; unhealthy direct path is not published'
+ubus call network.interface.4_1 down
+sleep 1
+if zbt_qmi_reconcile_publication 4_1 4 qmitest "$qmi_ifindex"; then exit 1; fi
+ubus call network.interface.4_1 status | jq -e '.up==false and .autostart==false' >/dev/null
+ubus call network.interface.4_1v6 status | jq -e '.up==true' >/dev/null
+ubus call network.interface.2_1 status | jq -e '.up==true and .["ipv4-address"][0].address=="10.233.98.190"' >/dev/null
+ubus call network.interface.2_1v6 status | jq -e '.up==true' >/dev/null
+echo 'PASS: administrative stop remains stopped; other family stays online'
+echo 'PASS: backup-first dual-slot publication; primary repair/administrative stop leaves backup online'

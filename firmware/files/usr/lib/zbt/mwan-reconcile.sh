@@ -22,6 +22,17 @@ zbt_mwan_reconcile_iface() {
 	configured_family=$(uci -q get "mwan3.$interface.family")
 	[ "${configured_family:-ipv4}" = "ipv$family" ] || return 0
 	[ "$(uci -q get "network.$interface.modem_config")" = "$section" ] || return 0
+	# Direct CM traffic can work while netifd is still waiting for its protocol
+	# notification. Recover that missing publication before asking MWAN to
+	# initialize; MWAN correctly refuses an unpublished/down logical interface.
+	if [ "$(uci -q get "network.$interface.proto")" = zbtqmi ]; then
+		if zbt_qmi_reconcile_publication "$section" "$family" "$health_device" "$index"; then
+			network_flush_cache
+		else
+			logger -t zbt-mwan-reconcile "iface=$interface family=$family direct_health=online action=check_publication result=not_ready_or_administratively_stopped"
+			return 0
+		fi
+	fi
 	network_is_up "$interface" || {
 		logger -t zbt-mwan-reconcile "iface=$interface direct_health=online result=netifd_not_up tracker_not_promoted"
 		return 0

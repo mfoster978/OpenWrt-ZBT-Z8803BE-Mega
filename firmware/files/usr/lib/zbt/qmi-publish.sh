@@ -23,10 +23,34 @@ zbt_qmi_publish() {
 	snapshot=$(printf '%s' "$payload" | sha256sum | cut -d' ' -f1)
 	eval "current=\${qmi_published$family:-}"
 	# A netifd reload needs a new update even if the modem retained its IP.
+	# The independent health reconciler repairs missing publication only. It
+	# has no session-local snapshot and must not emit an ifupdate every poll.
+	if [ "${3:-}" = repair ] && zbt_qmi_published; then return 0; fi
 	if [ "$snapshot" != "$current" ] || ! zbt_qmi_published; then
+		zbt_qmi_owned || return 1
 		ubus -t 5 call "network.interface.$interface" notify_proto "$payload" >/dev/null 2>&1 || return 1
 		zbt_qmi_published || return 1
 		eval "qmi_published$family=\$snapshot"
+		[ "${3:-}" != repair ] || logger -t zbt-mwan-reconcile "iface=$interface family=$family device=$modem_netcard action=publish_existing_cm_address result=verified"
 	fi
 	return 0
 }
+
+# Re-publish an already working CM data path after a missed netifd update.
+# Never start an administratively stopped interface or touch modem settings.
+zbt_qmi_reconcile_publication() (
+	local modem_config="$1" family="$2" modem_netcard="$3" qmi_ifindex="$4" interface status
+	interface=$modem_config
+	[ "$family" != 6 ] || interface=${modem_config}v6
+	[ "$(uci -q get "network.$interface.proto")" = zbtqmi ] || return 1
+	[ "$(uci -q get "network.$interface.modem_config")" = "$modem_config" ] || return 1
+	status=$(ubus -t 3 call "network.interface.$interface" status) || return 1
+	printf '%s' "$status" | jq -e '.autostart == true and .available == true and (.up == true or .pending == true)' >/dev/null || return 1
+	zbt_qmi_owned() {
+		zbt_health_online "$modem_config" &&
+		[ "$(zbt_netdev "$modem_config")" = "$modem_netcard" ] &&
+		[ "$(cat "${ZBT_SYSFS:-/sys}/class/net/$modem_netcard/ifindex" 2>/dev/null)" = "$qmi_ifindex" ] &&
+		[ ! -e "${ZBT_SYSFS:-/sys}/class/net/$modem_netcard/master" ]
+	}
+	zbt_qmi_publish "$family" "$interface" repair
+)
