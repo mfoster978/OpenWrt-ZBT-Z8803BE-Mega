@@ -225,3 +225,18 @@ busybox sh -c '. "$DB/state.sh"; config_section=4_1; zbt_5g_lock && echo availab
 `, f.env);
   assert.equal(out, 'locked\navailable');
 });
+test('reconnection probes can wake idle NSA; candidate still requires two consecutive post-probe NR verifications', () => {
+  const f = fixture();
+  const out = shell(adaptive + `
+zbt_speed_renew() { :; }; zbt_adaptive_device() { :; }; sleep() { :; }
+zbt_adaptive_probe() { touch "$DB/active"; echo probe >> "$DB/calls"; }
+zbt_adaptive_serving() { [ -f "$DB/active" ] || return 1; echo 'nsa -90 16'; }
+zbt_adaptive_wait_data nsa && echo verified
+cat "$DB/calls"
+`, f.env);
+  assert.equal(out, 'verified\nprobe\nprobe');
+  assert.equal(shell(adaptive + `
+zbt_speed_renew() { :; }; zbt_adaptive_device() { :; }; sleep() { :; }
+zbt_adaptive_probe() { :; }; zbt_adaptive_serving() { return 1; }
+zbt_adaptive_wait_data nsa && echo unsafe || echo rejected`, f.env), 'rejected');
+});

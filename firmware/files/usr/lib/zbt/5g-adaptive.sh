@@ -90,9 +90,15 @@ zbt_adaptive_wait_data() {
 	local expected="$1" n=0 good=0 serving
 	while [ "$n" -lt 12 ]; do
 		zbt_speed_renew && zbt_adaptive_device || return 1
-		serving=$(zbt_adaptive_serving) || serving=''
-		if { [ "$expected" = any ] || [ "${serving%% *}" = "$expected" ]; } && zbt_adaptive_probe; then
+		# A data request can wake an idle NSA connection. Do not gate the
+		# request itself on a pre-transfer NR reading. It still takes two valid
+		# post-probe deployment + reachability results to verify the candidate.
+		serving=''
+		if zbt_adaptive_probe; then
+			serving=$(zbt_adaptive_serving) || serving=''
+			if [ "$expected" = any ] || [ "${serving%% *}" = "$expected" ]; then
 			good=$((good + 1)); [ "$good" -lt 2 ] || return 0
+			else good=0; fi
 		else good=0; fi
 		sleep 5; n=$((n + 1))
 	done
