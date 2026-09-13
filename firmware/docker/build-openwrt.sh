@@ -587,6 +587,9 @@ required_overlay_files=(
   etc/uci-defaults/99-speedify-bootstrap
   etc/nginx/conf.d/zbt-speedify-https.locations
   etc/init.d/speedify-installer
+  etc/init.d/zbt-speedify-guard
+  usr/sbin/zbt-speedify-guard
+  usr/lib/zbt/speedify-routing.sh
   etc/init.d/zbt-luci-backend
   usr/sbin/speedify-installer-loop
   usr/share/zbt/speedify-luci-wrapper.js
@@ -631,7 +634,9 @@ for overlay_file in "${required_overlay_files[@]}"; do
   fi
 done
 echo "Validated files overlay in root filesystem: ${rootfs_dir}"
-for overlay_file in usr/lib/zbt/qmodem-5g.sh usr/lib/zbt/qmi-session.sh usr/sbin/zbt-wifi-firstboot etc/init.d/zbt-wifi-firstboot etc/uci-defaults/71-zbt-wifi-firstboot usr/lib/zbt/mwan3-speed-metric.sh usr/libexec/rpcd/zbt.speedify usr/share/rpcd/acl.d/zbt-speedify.json usr/share/zbt/speedify-luci-wrapper.js etc/uci-defaults/99-zbt-modem-route-v5; do
+test -x "${rootfs_dir}/usr/sbin/zbt-speedify-guard" &&
+  test -x "${rootfs_dir}/etc/init.d/zbt-speedify-guard" || exit 4
+for overlay_file in usr/lib/zbt/qmodem-5g.sh usr/lib/zbt/qmi-session.sh usr/sbin/zbt-wifi-firstboot etc/init.d/zbt-wifi-firstboot etc/uci-defaults/71-zbt-wifi-firstboot usr/lib/zbt/mwan3-speed-metric.sh usr/libexec/rpcd/zbt.speedify usr/share/rpcd/acl.d/zbt-speedify.json usr/share/zbt/speedify-luci-wrapper.js usr/lib/zbt/speedify-routing.sh usr/sbin/zbt-speedify-guard etc/init.d/zbt-speedify-guard etc/uci-defaults/99-zbt-modem-route-v5; do
   cmp "${FILES_OVERLAY_DIR}/${overlay_file}" "${rootfs_dir}/${overlay_file}" || exit 4
 done
 # Check the actual installed dialer and authoritative board defaults, not

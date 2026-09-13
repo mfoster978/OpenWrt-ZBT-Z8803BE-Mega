@@ -169,6 +169,7 @@ test('Speedify RPC is read-only diagnostics; native Speedify owns activation', (
   const rpc = read('files/usr/libexec/rpcd/zbt.speedify').replace('/usr/share/speedify/speedify_cli', cli);
   const call = (method, reply, code = '0', state = 'LOGGED_IN') => JSON.parse(shell(rpc, { REPLY: JSON.stringify(reply), STATE: JSON.stringify({ state }), CLI_EXIT: code }, ['call', method]));
   assert.equal(call('status', { isAutoAccount: true, email: 'auto' }).signed_in, false);
+  assert.equal(call('status', { isAutoAccount: true, email: '' }, '0', 'LOGGING_IN').activation_status, 'pending');
   assert.equal(call('status', { isAutoAccount: false, email: 'test@example.invalid' }).signed_in, true);
   assert.equal(call('status', { isAutoAccount: false, email: 'test@example.invalid' }, '0', 'LOGGED_OUT').signed_in, false);
   assert.equal(call('status', { isAutoAccount: false, email: 'test@example.invalid', bytesAvailable: 0 }, '0', 'CONNECTED').signed_in, true, 'zero/unlimited quota is not proof of logout');
@@ -188,8 +189,10 @@ test('Speedify error diagnostics return fixed categories, not log credentials, a
     fs.writeFileSync(log, 'activation_url=https://example.invalid/?token=private-fixture\nNot able to login: ' + error + ' token=private-fixture\n');
     const out = shell(rpc, { STATE: '{"state":"LOGGED_OUT"}', ACCOUNT: '{"isAutoAccount":false,"email":""}' }, ['call', 'status']);
     assert.equal(JSON.parse(out).recent_error, error);
+    if (error === 'ERROR_NO_ROUTER_LICENSE') assert.equal(JSON.parse(out).activation_status, 'license_pending');
     assert.doesNotMatch(out, /private-fixture|activation_url|https:/);
   }
   const signed = JSON.parse(shell(rpc, { STATE: '{"state":"LOGGED_IN"}', ACCOUNT: '{"isAutoAccount":false,"email":"test@example.invalid","bytesAvailable":0}' }, ['call', 'status']));
   assert.equal(signed.signed_in, true); assert.equal(signed.tunnel_present, false); assert.equal(signed.recent_error, '');
+  assert.equal(signed.activation_status, 'confirmed');
 });

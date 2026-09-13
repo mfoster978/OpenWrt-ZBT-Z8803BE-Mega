@@ -116,6 +116,10 @@ wait_for_runtime() {
 }
 
 activate_services() {
+	# The pinned vendor APK adds its tunnel to several firewall zones. Re-run
+	# Mega's guarded repair after installation, including kept-config upgrades.
+	/etc/init.d/zbt-speedify-guard enable >/dev/null 2>&1 || return 1
+	service_running zbt-speedify-guard || /etc/init.d/zbt-speedify-guard start >/dev/null 2>&1 || return 1
 	/etc/init.d/speedify enable >/dev/null 2>&1 || return 1
 	service_running speedify || /etc/init.d/speedify start >/tmp/speedify-service.log 2>&1
 	if [ "$INSTALL_LUCI" = '1' ]; then

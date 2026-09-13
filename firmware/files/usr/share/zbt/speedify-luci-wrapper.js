@@ -15,6 +15,7 @@ return view.extend({
 	render: function() {
 		var status = E('p', { 'aria-live': 'polite' }, _('Reading Speedify daemon status…'));
 		var diagnostics = E('div', { 'class': 'cbi-section', id: 'mega-speedify-status' }, [status]);
+		var pendingSince = null;
 		var refresh = function() {
 			return readStatus().then(function(result) {
 				var message;
@@ -24,8 +25,11 @@ return view.extend({
 					message = result.state === 'CONNECTED' && result.tunnel_present
 						? _('Speedify account signed in; VPN connected.')
 						: _('Speedify account signed in; VPN is not connected yet.');
-				} else if (result.recent_error === 'ERROR_NO_ROUTER_LICENSE') {
-					message = _('Speedify recently rejected activation: ERROR_NO_ROUTER_LICENSE. A router license may still be assigned to an earlier router identity. Check Manage Routers in your Speedify account, then retry the native Sign In below.');
+				} else if (result.activation_status === 'pending' || result.activation_status === 'license_pending' || result.recent_error === 'ERROR_NO_ROUTER_LICENSE') {
+					if (pendingSince === null) pendingSince = Date.now();
+					message = Date.now() - pendingSince < 120000
+						? _('Waiting for Speedify to confirm router activation. A temporary ERROR_NO_ROUTER_LICENSE response can occur before activation completes. Keep the native sign-in session below open; this page will not reset it.')
+						: _('Router activation is still unconfirmed. Check Manage Routers in your Speedify account or contact Speedify support if ERROR_NO_ROUTER_LICENSE persists. Recheck status here, or retry Sign In in the native dashboard; neither requires resetting the router account.');
 				} else if (result.recent_error === 'NETWORK_ERROR' || result.needs_internet) {
 					message = _('Speedify could not complete sign-in because of a network error. Check the router’s Internet connection and retry the native Sign In below.');
 				} else if (result.recent_error === 'AUTHENTICATION_FAILED') {
@@ -34,6 +38,7 @@ return view.extend({
 					message = _('Speedify has not confirmed router sign-in. Complete Sign In in the native dashboard below. Signing into the account website alone does not confirm router activation.');
 				}
 				status.textContent = message;
+				if (result && result.signed_in) pendingSince = null;
 			}).catch(function() {
 				status.textContent = _('Unable to read Speedify daemon status. The native dashboard remains available below.');
 			});
@@ -42,6 +47,10 @@ return view.extend({
 		// second activation link when returning from the account website.
 		poll.add(refresh, 10);
 		refresh();
+		diagnostics.appendChild(E('button', {
+			'class': 'cbi-button cbi-button-action', type: 'button',
+			click: refresh
+		}, _('Recheck activation status')));
 		var sessionId = (L.env && L.env.sessionid) || '';
 		if (sessionId) {
 			document.cookie = 'sfy-session=' + encodeURIComponent(sessionId) +

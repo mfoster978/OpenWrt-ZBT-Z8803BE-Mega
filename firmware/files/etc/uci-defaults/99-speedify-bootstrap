@@ -9,6 +9,10 @@ if ! uci -q get speedify_bootstrap.main.install_luci >/dev/null 2>&1; then
 fi
 uci -q commit speedify_bootstrap
 
+# Enabled even while the optional APK is absent; it stays idle until installed.
+# A kept-config upgrade must repair the vendor firewall again, too.
+/etc/init.d/zbt-speedify-guard enable >/dev/null 2>&1 || true
+
 # A sysupgrade removes the runtime-installed vendor UI. Clear any preserved
 # menu cache so the ROM-resident setup screen is immediately visible while the
 # official APK is downloaded again.

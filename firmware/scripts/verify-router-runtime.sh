@@ -77,12 +77,16 @@ uci -q show modem_watchdog
 ip -4 route show default
 ip -4 rule show
 mwan3 status 2>/dev/null || true
-ubus -t 12 call zbt.speedify status '{}' 2>/dev/null | jq '{ok, signed_in, state, tunnel_present, recent_error, needs_internet, message}' || true
+ubus -t 12 call zbt.speedify status '{}' 2>/dev/null | jq '{ok, signed_in, state, activation_status, tunnel_present, recent_error, needs_internet, message}' || true
+timeout 5 /usr/share/speedify/speedify_cli show settings 2>/dev/null | jq '{bondingMode, fixedDelay, pep}' || true
+uci -q get 'firewall.@defaults[0].flow_offloading'
+uci -q get 'firewall.@defaults[0].flow_offloading_hw'
+uci -q get speedify_bootstrap.main.throughput_v1
 printf '\n%s\n' 'Installed UI packages and service health'
 for package in luci-app-mwan3 luci-app-speedtest-lite zbt-speedtest luci-app-tailscale speedify luci-app-speedify; do
 	apk info -e "$package" >/dev/null 2>&1 && printf '%s=installed\n' "$package" || printf '%s=missing\n' "$package"
 done
-for service in uwsgi nginx zbt-luci-backend sfy-ws-auth speedify speedify-installer tailscale qmodem_network; do
+for service in uwsgi nginx zbt-luci-backend sfy-ws-auth speedify speedify-installer zbt-speedify-guard tailscale qmodem_network; do
 	printf '%s=' "$service"
 	"/etc/init.d/$service" status 2>/dev/null || true
 done

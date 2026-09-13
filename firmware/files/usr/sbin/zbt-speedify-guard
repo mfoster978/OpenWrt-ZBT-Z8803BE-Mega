@@ -1,0 +1,27 @@
+#!/bin/sh
+. /usr/lib/zbt/speedify-routing.sh
+
+firewall_stamp=''
+dead_pep=0
+while :; do
+	if [ -x /usr/share/speedify/speedify_cli ]; then
+		current_stamp=$(sha256sum /etc/config/firewall 2>/dev/null)
+		if [ "$current_stamp" != "$firewall_stamp" ]; then
+			if sf_repair_firewall; then
+				firewall_stamp=$(sha256sum /etc/config/firewall 2>/dev/null)
+			else
+				# Fixed diagnostic only; never expose account settings or tokens.
+				sf_log 'firewall repair pending: check Speedify interface, duplicate zones or unsaved firewall changes'
+			fi
+		fi
+		if sf_tunnel_routes || sf_pep_table; then sf_disable_offload || true; fi
+		sf_migrate_profile || true
+		if sf_pep_table && ! sf_pep_listener; then
+			dead_pep=$((dead_pep + 1))
+			if [ "$dead_pep" -ge 3 ]; then sf_clear_dead_pep && dead_pep=0; fi
+		else
+			dead_pep=0
+		fi
+	fi
+	sleep 10
+done

@@ -34,6 +34,8 @@ jobs:
             mount -t sysfs -o ro,nosuid,nodev,noexec sysfs /sys
             exec sh "$MEGA_TEST_REPO/firmware/tests/qmi-routing.sh"
           '
+      - name: Verify Speedify dead-PEP cleanup preserves unrelated kernel rules
+        run: sudo env "MEGA_TEST_REPO=$GITHUB_WORKSPACE" MEGA_ISOLATED_NETWORK_TEST=1 unshare --net -- sh firmware/tests/speedify-pep-kernel.sh
   speedtest-engine:
     runs-on: ubuntu-latest
     timeout-minutes: 10

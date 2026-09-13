@@ -16,7 +16,7 @@ const fixture = `
 window._ = value => value;
 window.E = (tag, attrs, children) => {
   const element = document.createElement(tag);
-  Object.entries(attrs || {}).forEach(([key, value]) => element.setAttribute(key, value));
+  Object.entries(attrs || {}).forEach(([key, value]) => typeof value === 'function' ? element.addEventListener(key, value) : element.setAttribute(key, value));
   (Array.isArray(children) ? children : children == null ? [] : [children]).forEach(child =>
     element.appendChild(child instanceof Node ? child : document.createTextNode(child)));
   return element;
@@ -126,6 +126,15 @@ document.querySelector('main').appendChild(new Function('view', 'E', '_', 'L', '
         assert.equal(activationCalls, 1, 'diagnostics do not regenerate activation');
       }
       signedIn = true;
+      await page.evaluate(async () => {
+        window.daemonStatus = { ok: true, signed_in: false, activation_status: 'pending' };
+        await window.refreshDaemonStatus();
+        const originalNow = Date.now; Date.now = () => originalNow() + 121000;
+      });
+      await page.getByRole('button', { name: 'Recheck activation status' }).click();
+      await page.getByText('Router activation is still unconfirmed.', { exact: false }).waitFor();
+      assert.equal(indexRequests, before + 1, 'activation timeout/recheck preserves dashboard and session');
+      assert.equal(activationCalls, 1, 'status recheck is not another activation request');
       report('report_accounting_data', { isAutoAccount: false, email: 'test@example.invalid', bytesAvailable: 1000000000 });
       report('report_current_state', { state: 2 });
       await native.getByText('Finish Signing In', { exact: true }).waitFor({ state: 'hidden' });
