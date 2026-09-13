@@ -387,6 +387,7 @@ if ! grep -q '^CONFIG_PACKAGE_kmod-tun=y$' .config; then
   exit 3
 fi
 required_config_flags=(
+  "CONFIG_PACKAGE_ip-full=y"
   "${target_device_config}=y"
   "CONFIG_PACKAGE_kmod-usb-net-qmi-wwan=y"
   "CONFIG_PACKAGE_kmod-usb-net-cdc-mbim=y"
