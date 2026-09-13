@@ -810,7 +810,7 @@ grep -Fq 'take up to three minutes' \
   "${rootfs_dir}/www/luci-static/resources/view/qmodem/config_advanced.js" || {
   echo 'Nearby-cell scan timing guidance is missing from LuCI' >&2; exit 4;
 }
-grep -Fq 'Automatic preferred — modem/network selection' \
+grep -Fq 'Automatic adaptive — measured SA/NSA preference' \
   "${rootfs_dir}/www/luci-static/resources/view/qmodem/config_advanced.js" || {
   echo 'Quectel SA/NSA connection-type control is missing from LuCI' >&2; exit 4;
 }
