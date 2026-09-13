@@ -343,6 +343,13 @@ for patch_name in qmodem-at-transport-v6.patch qmodem-radio-rpc-v6.patch zbt-qmo
   test -s "firmware/patches/$patch_name"
   grep -Fq "$patch_name" firmware/docker/build-openwrt.sh
 done
+grep -Fq 'procd_set_param respawn 3600 5 0' firmware/files/etc/init.d/zbt-wifi-firstboot
+grep -Fq 'configured-ap-not-running phase=boot' firmware/files/usr/sbin/zbt-wifi-firstboot
+grep -Fq 'while sleep "$ZBT_WIFI_MONITOR_INTERVAL"' firmware/files/usr/sbin/zbt-wifi-firstboot
+if grep -Fq '[ -f /etc/uci-defaults/72-zbt-z8803be-wifi ]' firmware/files/etc/init.d/zbt-wifi-firstboot; then
+  echo 'Kept-configuration Wi-Fi recovery must not depend on pending defaults' >&2
+  exit 1
+fi
 test -s firmware/kernel-patches/967-arm64-dts-mt7988-pcie-external-clocks.patch
 grep -Fq '967-arm64-dts-mt7988-pcie-external-clocks.patch' firmware/docker/build-openwrt.sh
 

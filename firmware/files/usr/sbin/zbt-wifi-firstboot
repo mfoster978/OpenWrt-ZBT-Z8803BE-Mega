@@ -1,35 +1,115 @@
 #!/bin/sh
-# Retry only known pending Wi-Fi defaults. Never reset radios, networking,
-# SSIDs or an existing configuration in response to an absent PHY.
-ready=0
-for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
-	set -- /sys/class/ieee80211/phy*
-	if [ -d "$1" ] && ubus -t 2 list network.wireless 2>/dev/null | grep -qx network.wireless; then
-		ready=1
-		break
+# Recover only configured, enabled access points.  Never regenerate or reset an
+# owner's wireless configuration, never restart the LAN/network service, and
+# never unload a live Wi-Fi driver.
+ZBT_WIFI_SYSFS=${ZBT_WIFI_SYSFS:-/sys}
+ZBT_WIFI_DEFAULTS=${ZBT_WIFI_DEFAULTS:-/etc/uci-defaults}
+ZBT_WIFI_LOCK=${ZBT_WIFI_LOCK:-/var/lock/zbt-wifi-recovery.lock}
+ZBT_WIFI_MONITOR_INTERVAL=${ZBT_WIFI_MONITOR_INTERVAL:-30}
+ZBT_WIFI_ONESHOT=${ZBT_WIFI_ONESHOT:-0}
+ZBT_WIFI_CHANGED=0
+
+exec 9>"$ZBT_WIFI_LOCK"
+flock -n 9 || exit 0
+trap 'exit 0' INT TERM
+
+zbt_wifi_ready() {
+	set -- "$ZBT_WIFI_SYSFS"/class/ieee80211/phy*
+	[ -d "$1" ] && ubus -t 2 list network.wireless 2>/dev/null | grep -qx network.wireless
+}
+
+zbt_wifi_ap_enabled() {
+	local iface radio
+	for iface in $(uci -q show wireless | sed -nE 's/^wireless\.([^.]+)=wifi-iface$/\1/p'); do
+		[ "$(uci -q get "wireless.$iface.mode")" = ap ] || continue
+		[ "$(uci -q get "wireless.$iface.disabled")" != 1 ] || continue
+		for radio in $(uci -q get "wireless.$iface.device"); do
+			[ "$(uci -q get "wireless.$radio.disabled")" != 1 ] && return 0
+		done
+	done
+	return 1
+}
+
+zbt_wifi_ap_up() {
+	ubus -t 5 call network.wireless status 2>/dev/null | jq -e '
+		[.[]? | select(.up == true and .disabled != true) |
+		 .interfaces[]? | select(((.ifname // "") | length) > 0 and
+		 ((.config.mode // "ap") == "ap"))] | length > 0' >/dev/null 2>&1
+}
+
+zbt_wifi_apply_pending() {
+	local name file before changed=0
+	for name in 72-zbt-z8803be-wifi 73-zbt-us-wifi-defaults; do
+		file="$ZBT_WIFI_DEFAULTS/$name"
+		[ -f "$file" ] || continue
+		before=$(uci -q export wireless | sha256sum)
+		if sh "$file"; then
+			rm -f "$file"
+		else
+			logger -t zbt-wifi "action=defaults result=deferred file=$name reason=wireless-not-ready"
+			return 1
+		fi
+		[ "$before" = "$(uci -q export wireless | sha256sum)" ] || changed=1
+	done
+	if [ "$changed" = 1 ]; then
+		ZBT_WIFI_CHANGED=1
+		/sbin/wifi reload
+		logger -t zbt-wifi 'action=reload result=requested reason=deferred-defaults'
 	fi
+	return 0
+}
+
+# A slow PCIe/MT7996 probe must not strand a kept wireless configuration.  Wait
+# three minutes, make one non-destructive module-load request, then let procd
+# retry the worker if the PHY is still absent.
+ready=0
+attempt=0
+while [ "$attempt" -lt 36 ]; do
+	if zbt_wifi_ready; then ready=1; break; fi
+	attempt=$((attempt + 1))
 	sleep 5
 done
 if [ "$ready" != 1 ]; then
-	logger -t zbt-wifi 'PHY/netifd not ready; wireless defaults retained for next boot. Inspect MT7996/PCIe probe logs.'
+	/sbin/modprobe mt7996e >/dev/null 2>&1 || true
+	logger -t zbt-wifi 'action=wait result=retry reason=mt7996-phy-or-netifd-absent'
 	exit 1
 fi
-changed=0
-for name in 72-zbt-z8803be-wifi 73-zbt-us-wifi-defaults; do
-	file="/etc/uci-defaults/$name"
-	[ -f "$file" ] || continue
-	before=$(uci -q export wireless | sha256sum)
-	if sh "$file"; then
-		rm -f "$file"
-	else
-		logger -t zbt-wifi "$name remains pending; wireless configuration was not ready"
-		exit 1
-	fi
-	[ "$before" = "$(uci -q export wireless | sha256sum)" ] || changed=1
-done
-# This worker starts after S20network and requires network.wireless above.
-# No blanket network restart and no reload if preserved settings are unchanged.
-if [ "$changed" = 1 ]; then
-	/sbin/wifi reload
-	logger -t zbt-wifi 'completed deferred wireless defaults after PHY registration'
+
+zbt_wifi_apply_pending || exit 1
+if [ "$ZBT_WIFI_CHANGED" != 1 ] && zbt_wifi_ap_enabled && ! zbt_wifi_ap_up; then
+	/sbin/wifi up
+	logger -t zbt-wifi 'action=up result=requested reason=configured-ap-not-running phase=boot'
 fi
+[ "$ZBT_WIFI_ONESHOT" != 1 ] || exit 0
+
+# Runtime recovery is deliberately conservative: require three consecutive
+# misses, try `wifi up` first, and use a radio-only reload only after another
+# three misses.  Healthy or intentionally disabled radios are never touched.
+misses=0
+stage=0
+while sleep "$ZBT_WIFI_MONITOR_INTERVAL"; do
+	if ! zbt_wifi_ready || ! zbt_wifi_ap_enabled; then
+		misses=0
+		stage=0
+		continue
+	fi
+	if zbt_wifi_ap_up; then
+		[ "$misses" = 0 ] && [ "$stage" = 0 ] ||
+			logger -t zbt-wifi 'action=monitor result=recovered'
+		misses=0
+		stage=0
+		continue
+	fi
+	misses=$((misses + 1))
+	[ "$misses" -ge 3 ] || continue
+	misses=0
+	if [ "$stage" = 0 ]; then
+		/sbin/wifi up
+		stage=1
+		logger -t zbt-wifi 'action=up result=requested reason=configured-ap-not-running phase=runtime'
+	else
+		/sbin/wifi reload
+		stage=2
+		logger -t zbt-wifi 'action=reload result=requested reason=configured-ap-still-not-running phase=runtime'
+	fi
+done

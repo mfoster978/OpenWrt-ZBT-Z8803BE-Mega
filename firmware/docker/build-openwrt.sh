@@ -696,6 +696,10 @@ grep -Fq 'zbt_qmodem_ready "$section"' \
   "${rootfs_dir}/usr/lib/zbt/qmodem-start.sh" || exit 4
 grep -Fq 'action=dialer-exited' \
   "${rootfs_dir}/usr/lib/zbt/qmodem-start.sh" || exit 4
+grep -Fq 'procd_set_param respawn 3600 5 0' \
+  "${rootfs_dir}/etc/init.d/zbt-wifi-firstboot" || exit 4
+grep -Fq 'configured-ap-not-running phase=boot' \
+  "${rootfs_dir}/usr/sbin/zbt-wifi-firstboot" || exit 4
 grep -Fq '[ -d "$1" ] || exit 1' "${rootfs_dir}/etc/uci-defaults/72-zbt-z8803be-wifi" || exit 4
 if grep -q '/sbin/wifi reload' "${rootfs_dir}/etc/uci-defaults/72-zbt-z8803be-wifi"; then
   echo 'Unsafe first-boot wireless reload survived into the image' >&2; exit 4;

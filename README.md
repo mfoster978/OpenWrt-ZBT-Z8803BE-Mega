@@ -223,6 +223,8 @@ The Mega build also patches the board's **first-boot RPC overlay**, not only the
 
 Every firmware version is also used as LuCI's resource cache key. After an upgrade, the browser therefore loads the matching QModem, About, updater, Speedify and utility JavaScript instead of retaining a script from the preceding image. On the first boot after an upgrade, the LuCI health check waits for the normal uWSGI and nginx startup to settle before attempting a repair.
 
+The late Wi-Fi worker remains active after first-boot defaults have been consumed. On a settings-preserving upgrade it waits for the MT7996 PHY and netifd, leaves custom SSIDs and radio settings untouched, and starts a configured access point if the initial network pass missed it. Three consecutive runtime misses trigger `wifi up`; another three use a radio-only reload. Intentionally disabled radios are never started, and the LAN/network service is never restarted.
+
 The September 10 follow-up repairs LED startup ordering and trigger restoration without touching modem power or SIM GPIOs. Run `zbt-modem-led-poller status` for read-only LED diagnostics. See the [follow-up notes](firmware/docs/runtime-repair-2026-09.md#september-10-led-and-label-follow-up) for the remaining modem 2 registration check.
 
 The firmware does not infer a live modem merely because a UCI section exists. Runtime recovery is tied to a physically enumerated USB path, which prevents activity on one slot from needlessly repowering or redialing the other.

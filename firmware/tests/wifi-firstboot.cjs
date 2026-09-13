@@ -36,32 +36,68 @@ uci() {
   assert.doesNotMatch(script.replace(/^#.*$/gm, ''), /wifi detect|wifi reload|sleep 5/);
   const late = fs.readFileSync(path.join(root, 'firmware/files/usr/sbin/zbt-wifi-firstboot'), 'utf8');
   assert.match(late, /ubus -t 2 list network\.wireless/);
+  assert.match(late, /configured-ap-not-running phase=boot/);
+  assert.match(late, /while sleep "\$ZBT_WIFI_MONITOR_INTERVAL"/);
   assert.doesNotMatch(late.replace(/^#.*$/gm, ''), /network restart|wifi reset|wifi detect/);
   const pending = path.join(fixtures, 'pending'); fs.mkdirSync(pending);
   const calls = path.join(fixtures, 'calls');
   const state = path.join(fixtures, 'state'); fs.writeFileSync(state, 'initial');
-  const deferred = late.replaceAll('/sys/class/ieee80211', fixtures + '/phys')
-    .replaceAll('/etc/uci-defaults', pending).replaceAll('/sbin/wifi', 'wifi');
+  const lock = path.join(fixtures, 'wifi.lock');
+  const status = path.join(fixtures, 'status.json');
+  const deferred = late.replaceAll('/sbin/wifi', 'wifi').replaceAll('/sbin/modprobe', 'modprobe');
   const mocks = `
 sleep() { :; }
-ubus() { [ "$NETIFD" = ready ] && echo network.wireless; }
-uci() { cat "$STATE_FILE"; }
+flock() { :; }
+modprobe() { echo "modprobe $*" >> "$CALLS"; }
+ubus() {
+ case "$*" in
+  *'list network.wireless'*) [ "$NETIFD" = ready ] && echo network.wireless ;;
+  *'call network.wireless status'*) cat "$STATUS_FILE" ;;
+ esac
+}
+uci() {
+ case "$*" in
+  '-q show wireless') printf 'wireless.radio0=wifi-device\nwireless.ap=wifi-iface\n' ;;
+  '-q get wireless.ap.mode') echo ap ;;
+  '-q get wireless.ap.disabled'|'-q get wireless.radio0.disabled') [ "$AP_DISABLED" = 1 ] && echo 1 ;;
+  '-q get wireless.ap.device') echo radio0 ;;
+  '-q export wireless') cat "$STATE_FILE" ;;
+ esac
+}
 wifi() { echo "wifi $*" >> "$CALLS"; }
 logger() { :; }
 `;
-  const env = { NETIFD: 'ready', STATE_FILE: state, CALLS: calls };
+  const env = { NETIFD: 'ready', STATE_FILE: state, STATUS_FILE: status, CALLS: calls,
+    ZBT_WIFI_SYSFS: fixtures, ZBT_WIFI_DEFAULTS: pending, ZBT_WIFI_LOCK: lock,
+    ZBT_WIFI_ONESHOT: '1' };
+  fs.writeFileSync(status, '{}\n');
+  const noLatePhy = execute(mocks + deferred, { ...env, NETIFD: 'starting' });
+  assert.equal(noLatePhy.status, 1);
+  assert.equal(fs.readFileSync(calls, 'utf8'), 'modprobe mt7996e\n', 'missing PHY requests only a module load');
+  fs.rmSync(calls);
+  fs.mkdirSync(path.join(fixtures, 'class/ieee80211/phy0'), { recursive: true });
   const first = path.join(pending, '72-zbt-z8803be-wifi');
   fs.writeFileSync(first, 'printf updated > "$STATE_FILE"\n');
   const waiting = execute(mocks + deferred, { ...env, NETIFD: 'starting' });
   assert.equal(waiting.status, 1);
   assert.equal(fs.existsSync(first), true, 'pending default retained until netifd is ready');
   assert.equal(fs.readFileSync(state, 'utf8'), 'initial');
+  fs.rmSync(calls);
   const ready = execute(mocks + deferred, env);
   assert.equal(ready.status, 0, ready.stderr);
   assert.equal(fs.existsSync(first), false);
   assert.equal(fs.readFileSync(calls, 'utf8'), 'wifi reload\n', 'one late reload after actual configuration change');
-  fs.writeFileSync(first, 'exit 0\n');
+  fs.writeFileSync(status, JSON.stringify({ radio0: { up: true, disabled: false,
+    interfaces: [{ ifname: 'phy0-ap0', config: { mode: 'ap' } }] } }) + '\n');
   assert.equal(execute(mocks + deferred, env).status, 0);
-  assert.equal(fs.readFileSync(calls, 'utf8'), 'wifi reload\n', 'no reload when preserved configuration is unchanged');
-  console.log('Wi-Fi defaults: absent PHY, empty generation and preserved custom SSID behavior passed');
+  assert.equal(fs.readFileSync(calls, 'utf8'), 'wifi reload\n', 'healthy preserved AP is not interrupted');
+  fs.writeFileSync(status, '{}\n');
+  assert.equal(execute(mocks + deferred, env).status, 0);
+  assert.equal(fs.readFileSync(calls, 'utf8'), 'wifi reload\nwifi up\n', 'preserved configured AP gets a late wifi-up retry');
+  assert.equal(execute(mocks + deferred, { ...env, AP_DISABLED: '1' }).status, 0);
+  assert.equal(fs.readFileSync(calls, 'utf8'), 'wifi reload\nwifi up\n', 'intentionally disabled AP is never started');
+  const init = fs.readFileSync(path.join(root, 'firmware/files/etc/init.d/zbt-wifi-firstboot'), 'utf8');
+  assert.doesNotMatch(init, /uci-defaults\/72.*return 0/);
+  assert.match(init, /procd_set_param respawn 3600 5 0/);
+  console.log('Wi-Fi defaults and kept-config late/runtime AP recovery behavior passed');
 };
