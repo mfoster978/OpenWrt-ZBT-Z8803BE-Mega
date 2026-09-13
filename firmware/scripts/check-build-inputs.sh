@@ -57,7 +57,7 @@ grep -Fq "uci -q add_list \"wireless.\${first}.device=\${device}\"" \
 # pages. Keep it mobile-scoped and preserve the independently scoped About UI.
 test -s firmware/patches/luci-theme-argon-mega-mobile.patch
 test -s firmware/files/www/luci-static/resources/zbt-mega-mobile.css
-grep -Fq 'zbt-mega-mobile.css?v={{ version.luciversion }}' \
+grep -Fq 'zbt-mega-mobile.css?v={{ pkgs_update_time }}' \
   firmware/patches/luci-theme-argon-mega-mobile.patch
 grep -Fq 'luci-theme-argon-mega-mobile.patch' firmware/docker/build-openwrt.sh
 grep -Fq '@media screen and (max-width:768px)' \

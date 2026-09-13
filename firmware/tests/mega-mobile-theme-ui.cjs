@@ -12,7 +12,7 @@ const argonPatch = fs.readFileSync(path.join(root, 'firmware/patches/luci-theme-
 const resourcePatch = fs.readFileSync(path.join(root, 'firmware/patches/luci-mega-resource-version.patch'), 'utf8');
 assert.match(argonPatch, /zbt-mega-mobile\.css\?v=\{\{ pkgs_update_time \}\}/);
 assert.match(argonPatch, /luci\.js\?v=\{\{ pkgs_update_time \}\}/);
-assert.doesNotMatch(argonPatch, /luci\.js\?v=\{\{ version\.luciversion \}\}/);
+assert.doesNotMatch(argonPatch.split('\n').filter(line => line.startsWith('+')).join('\n'), /luci\.js\?v=\{\{ version\.luciversion \}\}/);
 assert.match(resourcePatch, /\/rom\/etc\/zbt-mega-build\.json/);
 const markup = `<!doctype html>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">

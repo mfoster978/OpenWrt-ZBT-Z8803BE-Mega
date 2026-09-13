@@ -1,0 +1,18 @@
+#!/bin/sh
+# Read-only: an online probe alone does not prove a WAN can forward clients.
+. /lib/functions.sh
+. /lib/functions/network.sh
+. /lib/mwan3/mwan3.sh
+. /usr/lib/zbt/mwan-runtime.sh
+case "$1" in wan_sfp|wan|usb_tether|4_1|2_1) family=4 ;;
+wan_sfp6|wan6|usb_tether6|4_1v6|2_1v6) family=6 ;; *) exit 1 ;; esac
+[ -z "$(uci -q changes mwan3)$(uci -q changes network)" ] || exit 1
+zbt_mwan_online "$1" || exit 1
+[ "$(cat "$MWAN3_STATUS_DIR/iface_state/$1" 2>/dev/null)" = online ] || exit 1
+config_load mwan3
+mwan3_get_iface_id id "$1"
+case "$id" in ''|*[!0-9]*|0) exit 1 ;; esac
+network_get_device device "$1" && network_is_up "$1" || exit 1
+ip -"$family" route show table "$id" default dev "$device" | grep -q '^default' || exit 1
+# An installed mark-to-table rule must exist as well as the table itself.
+ip -"$family" rule show | grep -Eq "fwmark .* lookup $id( |$)"

@@ -15,8 +15,12 @@ for section in $(uci -q show mwan3 | sed -n 's/^mwan3\.\([^.=]*\)=rule$/\1/p'); 
 	printf '%s policy=%s family=%s source=%s source_ip=%s enabled=%s\n' "$section" "$(uci -q get "mwan3.$section.use_policy")" "$(uci -q get "mwan3.$section.family")" "$(uci -q get "mwan3.$section.src_iface")" "$(uci -q get "mwan3.$section.src_ip")" "$(uci -q get "mwan3.$section.enabled")"
 done
 printf '\nDirect modem health: uptime device ifindex overall IPv4 IPv6\n'
-for slot in 4_1 2_1; do printf '%s: ' "$slot"; cat "/tmp/zbt-modem-health/$slot" 2>/dev/null || echo unknown; done
+for slot in 4_1 2_1; do
+	printf '%s: ' "$slot"; cat "/tmp/zbt-modem-health/$slot" 2>/dev/null || echo unknown
+	printf 'mwan_enabled=%s proto=%s modem_owner=%s\n' "$(uci -q get "mwan3.$slot.enabled")" "$(uci -q get "network.$slot.proto")" "$(uci -q get "network.$slot.modem_config")"
+	ubus call "network.interface.$slot" status 2>/dev/null | jq '{up,pending,available,autostart,proto,device,l3_device,"ipv4-address","ipv6-address"}'
+done
 printf '\nIPv4 rules:\n'; ip -4 rule show
 printf '\nIPv6 rules:\n'; ip -6 rule show
 printf '\nRecent failback and recovery events:\n'
-logread | grep -E 'zbt-mwan-failback|modem-watchdog' | tail -30
+logread | grep -E 'zbt-mwan-failback|zbt-mwan-reconcile|modem-watchdog' | tail -30

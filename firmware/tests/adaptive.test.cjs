@@ -83,6 +83,10 @@ zbt_5g_policy() { echo auto_adaptive; }
 zbt_5g_value() { echo 0; }
 zbt_5g_read() { zbt_5g_read_value=0; [ "$1" != mode_pref ] || zbt_5g_read_value=AUTO; }
 zbt_adaptive_idle() { [ "$BUSY" != 1 ]; }
+zbt_adaptive_trial_safe() { [ "$NO_BACKUP" != 1 ]; }
+zbt_mwan_now() { echo 1000; }
+uci() { [ "$IPV6" != 1 ] || echo 1; }
+ip() { [ "$IPV6" != 1 ] || echo '17: wwan8 inet6 2001:db8::1/64 scope global'; }
 zbt_adaptive_reserve() { [ "$BUDGET" != 0 ]; }
 zbt_adaptive_samples() {
   printf '%s\\n' "sample $1" >> "$DB/calls"
@@ -114,8 +118,48 @@ test('successful comparison selects measured NSA or SA, journals before changes 
     assert.equal(fs.readFileSync(path.join(f.dir, 'verified'), 'utf8').trim(), winner);
     assert.equal(fs.existsSync(path.join(f.dir, 'rollback')), false);
     assert.equal(fs.existsSync(path.join(f.dir, 'maintenance')), false);
-    assert.equal(f.calls, `sample ${base}\ntracker ifdown 4_1\napply ${winner}\nverify ${winner}\nresume\nsample ${winner}\n`);
+    assert.equal(f.calls, `sample ${base}\ntracker ifdown 4_1\napply ${winner}\nverify ${winner}\nsample ${winner}\nresume\n`);
   }
+});
+test('IPv6-enabled trials withdraw both families before a radio write and do not resume before sampling',()=>{
+  const f=round({IPV6:'1'});
+  assert.match(f.calls,/tracker ifdown 4_1\ntracker ifdown 4_1v6\napply nsa/);
+  assert.match(f.calls,/verify nsa\nsample nsa\nresume/);
+});
+test('losing the backup before a mode change prevents applying the candidate',()=>{
+  const f=round({NO_BACKUP:'1'});
+  assert.doesNotMatch(f.calls,/apply nsa/);
+  assert.match(f.calls,/apply auto\nverify any\nresume/);
+});
+test('readiness failure does not install the failed-trial cooldown',()=>{
+  for(const env of [{OFFLINE:'1'},{BUSY:'1'},{UNSUPPORTED:'1'}]) {
+    const f=round(env);
+    assert.equal(fs.existsSync(path.join(f.dir,'attempt')),false);
+  }
+});
+test('IPv4 backup alone is insufficient when the tested modem has IPv6',()=>{
+  const out=shell(adaptive.replaceAll('/usr/sbin/zbt-mwan-standby-ready','standby')+`
+config_section=4_1; adaptive_ipv6=1
+zbt_adaptive_backup() { :; }
+zbt_mwan_online() { [ "$1" = 2_1v6 ]; }
+standby() { [ "$READY6" = 1 ]; }
+READY6=0; zbt_adaptive_trial_safe && echo unsafe || echo deferred
+READY6=1; zbt_adaptive_trial_safe && echo ready`);
+  assert.equal(out,'deferred\nready');
+});
+test('candidate reconnection aborts promptly when backup is lost, but rollback still attempts recovery',()=>{
+  const out=shell(adaptive+`
+zbt_speed_renew() { :; }; zbt_adaptive_device() { :; }; zbt_adaptive_enabled() { :; }
+zbt_adaptive_trial_safe() { return 1; }; zbt_adaptive_probe() { echo unexpected; return 1; }
+zbt_adaptive_wait_data nsa || echo aborted`);
+  assert.equal(out,'aborted');
+});
+test('adaptive command execution uses MWAN socket bypass, not just a source IP',()=>{
+  const out=shell(adaptive+`
+config_section=2_1
+mwan3() { printf '%s\\n' "$*"; }
+zbt_adaptive_exec curl --interface if!wwan3 https://www.gstatic.com/generate_204`);
+  assert.equal(out,'use 2_1 curl --interface if!wwan3 https://www.gstatic.com/generate_204');
 });
 test('failed write, missing 5G registration, failed sample or insufficient improvement restores verified automatic', () => {
   for (const env of [{ FAIL_WRITE: 'nsa' }, { NO_REGISTER: 'nsa' }, { BAD_CANDIDATE: '1' }, { SCORES: '[101,102,103]' }]) {
@@ -139,6 +183,7 @@ zbt_speed_renew() { :; }
 zbt_5g_apply() { echo "apply $1"; }
 zbt_adaptive_wait_data() { return 1; }
 mwan3() { :; }
+zbt_adaptive_resume() { return 1; }
 zbt_adaptive_restore || true
 cat "$DB/status"`, f.env);
   assert.match(output, /apply nsa\napply auto/);
@@ -171,10 +216,11 @@ zbt_mwan_refresh 4_1 wwan8 192.0.0.2/27
 zbt_mwan_refresh 4_1 wwan8 192.0.0.2/27
 TEST_CLOCK=161; zbt_mwan_refresh 4_1 wwan8 192.0.0.2/27
 TEST_CLOCK=162; zbt_mwan_refresh 4_1 wwan8 192.0.0.2/27 new-session
+TEST_CLOCK=163; zbt_mwan_refresh 4_1 wwan8 192.0.0.2
 TEST_CLOCK=222; zbt_mwan_refresh 4_1 wwan3 192.0.0.2/27 || true
 cat "$DB/calls"
 `, { ...f.env, ZBT_MWAN_REFRESH: f.dir, ZBT_MWAN_TRACK: f.dir });
-  assert.equal(out, 'ifup 4_1\nifup 4_1\nifup 4_1');
+  assert.equal(out, 'ifup 4_1\nifup 4_1');
 });
 test('actual sample collector checks modem binding, address stability, traffic contamination and serving mode for every download', () => {
   for (const [env, expected] of [[{}, 'accepted'], [{ WRONG_DEVICE: '1' }, 'rejected'], [{ EXTRA_TRAFFIC: '1' }, 'rejected'], [{ LOST_IP: '1' }, 'rejected'], [{ LTE_FALLBACK: '1' }, 'rejected']]) {
@@ -183,6 +229,7 @@ test('actual sample collector checks modem binding, address stability, traffic c
 config_section=4_1; adaptive_device=wwan8
 echo 0 > "$DB/bytes"
 zbt_adaptive_enabled() { :; }; zbt_speed_renew() { :; }; zbt_mwan_online() { :; }
+zbt_adaptive_trial_safe() { :; }; zbt_adaptive_exec() { "$@"; }
 sleep() { :; }
 zbt_adaptive_address() { [ "$LOST_IP" != 1 ] || [ ! -f "$DB/downloaded" ] || return 1; echo 192.0.0.2/27; }
 zbt_adaptive_serving() { [ "$LTE_FALLBACK" != 1 ] || [ ! -f "$DB/downloaded" ] || return 1; echo 'sa -90 16'; }
@@ -205,6 +252,7 @@ test('adaptive reachability requires exact HTTPS 204 and binds the selected devi
     const f = fixture({ CODE: code });
     const out = shell(adaptive + `
 adaptive_device=wwan8
+zbt_adaptive_exec() { "$@"; }
 zbt_adaptive_address() { echo 192.0.0.2/27; }
 curl() { printf '%s\\n' "$*" > "$DB/curl"; echo "$CODE"; }
 zbt_adaptive_probe && echo yes || echo no`, f.env);
@@ -229,6 +277,7 @@ test('reconnection probes can wake idle NSA; candidate still requires two consec
   const f = fixture();
   const out = shell(adaptive + `
 zbt_speed_renew() { :; }; zbt_adaptive_device() { :; }; sleep() { :; }
+zbt_adaptive_enabled() { :; }; zbt_adaptive_trial_safe() { :; }
 zbt_adaptive_probe() { touch "$DB/active"; echo probe >> "$DB/calls"; }
 zbt_adaptive_serving() { [ -f "$DB/active" ] || return 1; echo 'nsa -90 16'; }
 zbt_adaptive_wait_data nsa && echo verified
@@ -237,6 +286,7 @@ cat "$DB/calls"
   assert.equal(out, 'verified\nprobe\nprobe');
   assert.equal(shell(adaptive + `
 zbt_speed_renew() { :; }; zbt_adaptive_device() { :; }; sleep() { :; }
+zbt_adaptive_enabled() { :; }; zbt_adaptive_trial_safe() { :; }
 zbt_adaptive_probe() { :; }; zbt_adaptive_serving() { return 1; }
 zbt_adaptive_wait_data nsa && echo unsafe || echo rejected`, f.env), 'rejected');
 });

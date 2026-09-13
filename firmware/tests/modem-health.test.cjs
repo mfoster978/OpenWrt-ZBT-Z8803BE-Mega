@@ -146,15 +146,25 @@ ip() {
   *route*) if [ "$NO_ROUTE" = 1 ]; then echo '[]'; else echo '[{"dst":"default","gateway":"192.0.0.1","metric":200}]'; fi ;;
  esac
 }
-ubus() { if [ "$5" = notify_proto ]; then echo "$6" >> "$DB/payload"; else echo '{"up":true}'; fi; }
+ubus() {
+ if [ "$5" = notify_proto ]; then
+  echo "$6" >> "$DB/payload"
+  [ "$DROP_UPDATE" != 1 ] || return 0
+  printf '%s' "$6" | jq '{up:true,l3_device:.ifname,"ipv4-address":((.ipaddr//[])|map({address:.ipaddr})),"ipv6-address":((.ip6addr//[])|map({address:.ipaddr}))}' > "$DB/status-$4"
+ else cat "$DB/status-$4" 2>/dev/null || echo '{"up":true,"l3_device":"stale-device"}'; fi
+}
 NO_ROUTE=1; zbt_qmi_publish 4 4_1 || echo waiting
 NO_ROUTE=0; zbt_qmi_publish 4 4_1; zbt_qmi_publish 4 4_1
 zbt_qmi_publish 6 4_1v6
 zbt_qmi_publish 4 lan || echo reject
+# A successful notify that netifd ignores must not be remembered as published.
+echo '{"up":true,"l3_device":"stale-device"}' > "$DB/status-network.interface.4_1"
+DROP_UPDATE=1; zbt_qmi_publish 4 4_1 || echo unverified
+DROP_UPDATE=0; zbt_qmi_publish 4 4_1; zbt_qmi_publish 4 4_1
 `);
-  assert.equal(f.out,'waiting\nreject\n');
+  assert.equal(f.out,'waiting\nreject\nunverified\n');
   const payloads=fs.readFileSync(path.join(f.d,'payload'),'utf8').trim().split('\n').map(JSON.parse);
-  assert.equal(payloads.length,2,'unchanged IP must not repeatedly republish');
+  assert.equal(payloads.length,4,'unchanged publication is idempotent; stale readback retries until verified');
   assert.equal(payloads[0]['address-external'],true);
   assert.deepEqual(payloads[0].ipaddr,[{ipaddr:'192.0.0.2',mask:'27'}]);
   assert.equal(payloads[0].routes[0].gateway,'192.0.0.1');

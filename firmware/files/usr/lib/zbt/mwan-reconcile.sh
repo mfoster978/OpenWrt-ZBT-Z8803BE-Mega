@@ -18,9 +18,14 @@ zbt_mwan_reconcile_iface() {
 	local stamp health_device index health v4 v6
 	read -r stamp health_device index health v4 v6 < "$ZBT_HEALTH_DIR/$section" || return 0
 	case "$family:$v4:$v6" in 4:online:*|6:*:online) ;; *) return 0 ;; esac
-	[ "$(uci -q get "mwan3.$interface.family")" = "ipv$family" ] || return 0
+	local configured_family
+	configured_family=$(uci -q get "mwan3.$interface.family")
+	[ "${configured_family:-ipv4}" = "ipv$family" ] || return 0
 	[ "$(uci -q get "network.$interface.modem_config")" = "$section" ] || return 0
-	network_is_up "$interface" || return 0
+	network_is_up "$interface" || {
+		logger -t zbt-mwan-reconcile "iface=$interface direct_health=online result=netifd_not_up tracker_not_promoted"
+		return 0
+	}
 	network_get_device device "$interface" || return 0
 	[ "$device" = "$health_device" ] && [ "$device" = "$(zbt_netdev "$section")" ] || return 0
 	if [ "$family" = 4 ]; then network_get_ipaddr address "$interface";

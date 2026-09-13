@@ -1,0 +1,54 @@
+--- a/net/mwan3/files/lib/mwan3/common.sh
++++ b/net/mwan3/files/lib/mwan3/common.sh
+@@ -44,2 +44,11 @@
+ 	_true_iface=$2
++	# Mega's CM publishes directly to these logical interfaces. A retained
++	# DHCP/QMI dynamic child must not shadow the now-working parent.
++	case "$2" in 4_1|2_1|4_1v6|2_1v6)
++		if [ "$(uci -q get "network.$2.proto")" = zbtqmi ] &&
++		   [ "$(uci -q get "network.$2.modem_config")" = "${2%v6}" ]; then
++			export "$1=$2"
++			return 0
++		fi
++	;; esac
+ 	config_get family "$2" family ipv4
+--- a/net/mwan3/files/lib/mwan3/mwan3.sh
++++ b/net/mwan3/files/lib/mwan3/mwan3.sh
+@@ -1061,3 +1061,3 @@
+ 	if [ "$up" != "1" ] || [ -z "$l3_device" ]; then
+-		return
++		return 1
+ 	fi
+--- a/net/mwan3/files/etc/hotplug.d/iface/15-mwan3
++++ b/net/mwan3/files/etc/hotplug.d/iface/15-mwan3
+@@ -34,5 +34,19 @@
+ }
+ 
++# Radio trials must not rejoin client routing through an automatic netifd
++# ifup/connected event. Both families stay excluded until explicit resume.
++case "$INTERFACE:$ACTION" in
++	4_1:ifup|4_1:connected|2_1:ifup|2_1:connected|4_1v6:ifup|4_1v6:connected|2_1v6:ifup|2_1v6:connected)
++		trial_owner=''
++		read -r trial_owner 2>/dev/null < "/tmp/zbt-5g/${INTERFACE%v6}/maintenance" || true
++		case "$trial_owner" in ''|*[!0-9]*|0|1) ;; *)
++			if kill -0 "$trial_owner" 2>/dev/null; then
++				LOG notice "Defer $ACTION on $INTERFACE during guarded radio trial"
++				exit 0
++			fi
++		;; esac
++	;;
++esac
+ if [ "$MWAN3_STARTUP" != "init" ] && [ "$ACTION" = "ifup" ]; then
+ 	mwan3_set_user_iface_rules $INTERFACE $DEVICE
+ fi
+--- a/net/mwan3/files/usr/sbin/mwan3
++++ b/net/mwan3/files/usr/sbin/mwan3
+@@ -244,6 +244,8 @@
+ 	ifup|ifdown|interfaces|policies|connected|rules|status|start|stop|restart|internal)
+ 		mwan3_init
+ 		"$@"
++		result=$?
++		[ "$1" != ifup ] || exit "$result"
+ 	;;
+ 	use)
+ 		mwan3_init

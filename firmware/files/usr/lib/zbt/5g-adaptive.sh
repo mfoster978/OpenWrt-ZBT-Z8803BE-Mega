@@ -58,15 +58,32 @@ zbt_adaptive_address() {
 zbt_adaptive_probe() {
 	local code
 	zbt_adaptive_address >/dev/null || return 1
-	code=$(curl -4 -sS --noproxy '*' --interface "if!$adaptive_device" --connect-timeout 5 --max-time 10 \
+	code=$(zbt_adaptive_exec curl -4 -sS --noproxy '*' --interface "if!$adaptive_device" --connect-timeout 5 --max-time 10 \
 		-o /dev/null -w '%{http_code}' https://www.gstatic.com/generate_204 2>/dev/null) || return 1
 	[ "$code" = 204 ]
+}
+zbt_adaptive_exec() {
+	# Set MWAN3's bypass socket mark as well as binding the physical device.
+	# A custom OUTPUT policy must not send a trial over the backup modem.
+	/usr/sbin/mwan3 use "$config_section" "$@"
 }
 zbt_adaptive_backup() {
 	local interface
 	for interface in wan_sfp wan usb_tether 4_1 2_1; do
 		[ "$interface" = "$config_section" ] && continue
-		zbt_mwan_online "$interface" && return 0
+		zbt_mwan_online "$interface" && /usr/sbin/zbt-mwan-standby-ready "$interface" && return 0
+	done
+	return 1
+}
+zbt_adaptive_trial_safe() {
+	zbt_adaptive_backup || return 1
+	# If the tested modem carries IPv6, require a verified IPv6 alternative
+	# too; IPv4 backup alone cannot protect IPv6 clients during a radio reset.
+	[ "${adaptive_ipv6:-0}" != 1 ] && return 0
+	local interface
+	for interface in wan_sfp6 wan6 usb_tether6 4_1v6 2_1v6; do
+		[ "$interface" = "${config_section}v6" ] && continue
+		zbt_mwan_online "$interface" && /usr/sbin/zbt-mwan-standby-ready "$interface" && return 0
 	done
 	return 1
 }
@@ -78,18 +95,19 @@ zbt_adaptive_bytes() {
 }
 zbt_adaptive_idle() {
 	local before after
-	zbt_adaptive_backup && zbt_adaptive_device || return 1
+	zbt_adaptive_trial_safe && zbt_adaptive_device || return 1
 	before=$(zbt_adaptive_bytes) || return 1
 	sleep 15
 	after=$(zbt_adaptive_bytes) || return 1
 	# About 4 KiB/s permits tracker chatter, not a stream or speed test.
 	[ "$after" -ge "$before" ] && [ $((after - before)) -le 65536 ] &&
-	zbt_adaptive_backup && zbt_adaptive_enabled && zbt_speed_renew
+	zbt_adaptive_trial_safe && zbt_adaptive_enabled && zbt_speed_renew
 }
 zbt_adaptive_wait_data() {
 	local expected="$1" n=0 good=0 serving
 	while [ "$n" -lt 12 ]; do
 		zbt_speed_renew && zbt_adaptive_device || return 1
+		[ "$expected" = any ] || { zbt_adaptive_enabled && zbt_adaptive_trial_safe; } || return 1
 		# A data request can wake an idle NSA connection. Do not gate the
 		# request itself on a pre-transfer NR reading. It still takes two valid
 		# post-probe deployment + reachability results to verify the candidate.
@@ -108,7 +126,11 @@ zbt_adaptive_resume() {
 	local n=0
 	# Resume only the selected tracker. This does not change netifd devices,
 	# WAN metrics, policies or either modem's band lists.
-	/usr/sbin/mwan3 ifup "$config_section" >/dev/null 2>&1
+	rm -f "$zbt_5g_dir/maintenance"
+	/usr/sbin/mwan3 ifup "$config_section" >/dev/null 2>&1 || return 1
+	if [ "$(uci -q get "mwan3.${config_section}v6.enabled")" = 1 ]; then
+		/usr/sbin/mwan3 ifup "${config_section}v6" >/dev/null 2>&1 || true
+	fi
 	while [ "$n" -lt 12 ]; do
 		zbt_speed_renew || return 1
 		zbt_mwan_online "$config_section" && return 0
@@ -129,17 +151,17 @@ zbt_adaptive_samples() {
 	local mode="$1" output="$2" n serving result speed address before after
 	printf '[]\n' > "$output"
 	for n in 1 2 3; do
-		zbt_adaptive_enabled && zbt_speed_renew && zbt_mwan_online "$config_section" || return 1
+		zbt_adaptive_enabled && zbt_speed_renew && zbt_adaptive_sample_ready || return 1
 		address=$(zbt_adaptive_address) || return 1
 		serving=$(zbt_adaptive_serving) || return 1
 		[ "${serving%% *}" = "$mode" ] || return 1
 		before=$(zbt_adaptive_bytes) || return 1
-		result=$(/usr/sbin/zbt-speed-sample "$config_section" download) || return 1
+		result=$(zbt_adaptive_exec /usr/sbin/zbt-speed-sample "$config_section" download) || return 1
 		after=$(zbt_adaptive_bytes) || return 1
 		# Reject samples contaminated by other traffic, device/address changes,
 		# a lost tracker, LTE fallback or a different deployment mid-transfer.
 		[ "$after" -ge "$before" ] && [ $((after - before)) -le 28000000 ] || return 1
-		[ "$(zbt_adaptive_address)" = "$address" ] && zbt_mwan_online "$config_section" || return 1
+		[ "$(zbt_adaptive_address)" = "$address" ] && zbt_adaptive_sample_ready || return 1
 		serving=$(zbt_adaptive_serving) || return 1
 		[ "${serving%% *}" = "$mode" ] || return 1
 		speed=$(printf '%s' "$result" | jq -er --arg d "$adaptive_device" --arg s "$config_section" \
@@ -148,6 +170,15 @@ zbt_adaptive_samples() {
 		sleep 3
 	done
 	zbt_adaptive_scores "$output" >/dev/null
+}
+zbt_adaptive_sample_ready() {
+	zbt_adaptive_trial_safe || return 1
+	if [ -f "$zbt_5g_dir/maintenance" ]; then
+		# The candidate must remain excluded from forwarded client traffic.
+		[ "$(cat "/var/run/mwan3/iface_state/$config_section" 2>/dev/null)" = offline ]
+	else
+		zbt_mwan_online "$config_section"
+	fi
 }
 zbt_adaptive_reserve() {
 	local now start=0 last=0 used=0 budget usage
@@ -195,12 +226,14 @@ zbt_adaptive_restore() {
 		printf '%s\n' auto > "$zbt_5g_dir/rollback"
 		zbt_speed_renew && zbt_5g_apply auto || true
 	fi
-	/usr/sbin/mwan3 ifup "$config_section" >/dev/null 2>&1
+	zbt_adaptive_resume || true
 	zbt_adaptive_status 'Recovery is not yet verified. Automatic network selection requested; retrying recovery, no further trials.'
 	return 1
 }
 zbt_adaptive_round() {
 	local serving baseline_mode candidate baseline_max candidate_min scores previous
+	adaptive_ipv6=0
+	if ip -o -6 addr show dev "$adaptive_device" scope global 2>/dev/null | grep -q ' inet6 '; then adaptive_ipv6=1; fi
 	zbt_adaptive_enabled && zbt_mwan_online "$config_section" && zbt_adaptive_probe || {
 		zbt_adaptive_status 'Waiting for this modem to have verified IPv4 Internet and an online MultiWAN tracker.'; return 1;
 	}
@@ -222,6 +255,9 @@ zbt_adaptive_round() {
 	zbt_adaptive_reserve || {
 		zbt_adaptive_status 'Waiting for the hourly test limit or daily data budget (default 300 MB; 150 MB reserved per comparison).'; return 1;
 	}
+	# Readiness is retried every service pass. Only an actual reserved trial
+	# incurs the 15-minute failed-attempt cooldown (plus the hourly data cap).
+	zbt_mwan_now > "$zbt_5g_dir/attempt"
 	zbt_adaptive_status "Measuring three interface-bound $baseline_mode baseline downloads (25 MB each)."
 	zbt_adaptive_samples "$baseline_mode" "$zbt_5g_dir/baseline.json" || {
 		zbt_adaptive_status 'Baseline was unavailable, changed mode, or was unstable. No candidate was applied.'; return 1;
@@ -233,9 +269,12 @@ zbt_adaptive_round() {
 	# Journal BEFORE changing the modem. A crash cannot promote the candidate.
 	printf '%s\n' "$previous" > "$zbt_5g_dir/rollback"
 	printf '%s\n' "$$" > "$zbt_5g_dir/maintenance"
-	zbt_adaptive_status "Testing $candidate; only this modem's MultiWAN tracker is paused."
-	/usr/sbin/mwan3 ifdown "$config_section" >/dev/null 2>&1
-	if ! zbt_5g_apply "$candidate" || ! zbt_adaptive_wait_data "$candidate" || ! zbt_adaptive_resume; then
+	zbt_adaptive_status "Testing $candidate; this modem is excluded from IPv4 and IPv6 client routing until verified."
+	/usr/sbin/mwan3 ifdown "$config_section" >/dev/null 2>&1 || { zbt_adaptive_restore; return 1; }
+	if [ "$(uci -q get "mwan3.${config_section}v6.enabled")" = 1 ]; then
+		/usr/sbin/mwan3 ifdown "${config_section}v6" >/dev/null 2>&1 || { zbt_adaptive_restore; return 1; }
+	fi
+	if ! zbt_adaptive_trial_safe || ! zbt_5g_apply "$candidate" || ! zbt_adaptive_wait_data "$candidate"; then
 		zbt_adaptive_restore && zbt_adaptive_status 'Candidate could not establish verified 5G Internet. Previous working selection restored.'
 		return 1
 	fi
@@ -245,7 +284,7 @@ zbt_adaptive_round() {
 	fi
 	scores=$(zbt_adaptive_scores "$zbt_5g_dir/candidate.json") || return 1
 	candidate_min=$(printf '%s' "$scores" | awk '{print $1}')
-	if zbt_adaptive_better "$baseline_max" "$candidate_min" && zbt_adaptive_probe; then
+	if zbt_adaptive_better "$baseline_max" "$candidate_min" && zbt_adaptive_probe && zbt_adaptive_resume; then
 		printf '%s\n' "$candidate" > "$zbt_5g_dir/verified"
 		rm -f "$zbt_5g_dir/rollback" "$zbt_5g_dir/maintenance"
 		zbt_adaptive_status "Verified $candidate preferred for this boot: all three samples exceeded the $baseline_mode baseline by at least 15%. Baseline max $baseline_max Mbps; candidate min $candidate_min Mbps. Bands unchanged."
@@ -254,7 +293,7 @@ zbt_adaptive_round() {
 	fi
 }
 zbt_adaptive_run() {
-	local config_section="$1" adaptive_device adaptive_index zbt_5g_dir now last=0 usage
+	local config_section="$1" adaptive_device adaptive_index adaptive_ipv6=0 zbt_5g_dir now last=0 usage
 	section_ready "$config_section" || return 0
 	zbt_5g_lock || return 0
 	adaptive_device=$(zbt_netdev "$config_section")
@@ -267,7 +306,6 @@ zbt_adaptive_run() {
 			read -r last 2>/dev/null < "$zbt_5g_dir/attempt" || true
 			case "$last" in ''|*[!0-9]*) last=0 ;; esac
 			if [ "$last" = 0 ] || [ $((now - last)) -ge 900 ]; then
-				printf '%s\n' "$now" > "$zbt_5g_dir/attempt"
 				zbt_adaptive_round
 			fi
 		fi

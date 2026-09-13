@@ -1,5 +1,14 @@
 #!/bin/sh
 # Runtime only: no learned IP, gateway, device or DNS is written into UCI.
+zbt_qmi_published() {
+	# A successful ubus call is not proof that netifd consumed the update.
+	# Check the same logical device and source-address data used by MWAN3.
+	ubus -t 3 call "network.interface.$interface" status 2>/dev/null |
+		jq -e --arg d "$modem_netcard" --arg f "$family" --argjson a "$addresses" '
+			.up == true and .l3_device == $d and
+			((if $f == "4" then .["ipv4-address"] else .["ipv6-address"] end) // [] |
+			map(.address) | . as $published | all($a[]; .ipaddr as $ip | $published | index($ip) != null))' >/dev/null
+}
 zbt_qmi_publish() {
 	local family="$1" interface="$2" addresses routes payload snapshot current
 	case "$interface:$family" in "$modem_config:4"|"${modem_config}v6:6") ;; *) return 1 ;; esac
@@ -14,8 +23,9 @@ zbt_qmi_publish() {
 	snapshot=$(printf '%s' "$payload" | sha256sum | cut -d' ' -f1)
 	eval "current=\${qmi_published$family:-}"
 	# A netifd reload needs a new update even if the modem retained its IP.
-	if [ "$snapshot" != "$current" ] || ! ubus -t 3 call "network.interface.$interface" status 2>/dev/null | jq -e '.up == true' >/dev/null; then
+	if [ "$snapshot" != "$current" ] || ! zbt_qmi_published; then
 		ubus -t 5 call "network.interface.$interface" notify_proto "$payload" >/dev/null 2>&1 || return 1
+		zbt_qmi_published || return 1
 		eval "qmi_published$family=\$snapshot"
 	fi
 	return 0

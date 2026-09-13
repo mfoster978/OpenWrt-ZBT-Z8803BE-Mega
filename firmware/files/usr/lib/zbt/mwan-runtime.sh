@@ -41,7 +41,11 @@ zbt_mwan_refresh() {
 	now=$(zbt_mwan_now)
 	state=$(cat "${ZBT_MWAN_TRACK:-/var/run/mwan3track}/$interface/STATUS" 2>/dev/null)
 	started=$(cat "${ZBT_MWAN_TRACK:-/var/run/mwan3track}/$interface/STARTED" 2>/dev/null)
-	if [ "$previous" != "$device:$address:$generation" ] || {
+	# Both the QMI publisher and health reconciler call here. The latter has
+	# no CM generation and supplies a bare IP: normalize their shared key or
+	# each caller defeats the other's cooldown every five seconds.
+	address=${address%%/*}
+	if [ "$previous" != "$device:$address" ] || {
 		case "$state:$started" in
 			paused:*|disabled:*|:0|:|online:0|offline:0) [ $((now - last)) -ge 60 ] ;;
 			*) false ;;
@@ -49,8 +53,11 @@ zbt_mwan_refresh() {
 		}; then
 		# QMI publishes its IP asynchronously after protocol setup. Rebuild
 		# only this tracker/routing table with the now-valid device and source IP.
-		printf '%s %s\n' "$now" "$device:$address:$generation" > "$path/$interface"
-		zbt_mwan_tracker_ifup "$interface"
-		ZBT_MWAN_REFRESHED=1
+		printf '%s %s\n' "$now" "$device:$address" > "$path/$interface"
+		if zbt_mwan_tracker_ifup "$interface"; then
+			ZBT_MWAN_REFRESHED=1
+		else
+			logger -t zbt-mwan-reconcile "iface=$interface device=$device action=tracker_ifup result=failed retry_seconds=60"
+		fi
 	fi
 }

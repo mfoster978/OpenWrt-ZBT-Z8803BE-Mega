@@ -239,6 +239,10 @@ if ! cmp -s "$regdb_patch" "$regdb_patch_target"; then
   cp "$regdb_patch" "$regdb_patch_target"
 fi
 policy_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/mwan3-speed-policy.patch"
+lifecycle_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/mwan3-mega-lifecycle.patch"
+if patch --dry-run --force --fuzz=0 --reverse -p1 -d feeds/packages < "$lifecycle_patch" >/dev/null 2>&1; then
+  patch --force --fuzz=0 --reverse -p1 -d feeds/packages < "$lifecycle_patch"
+fi
 # This insertion remains forward-applicable after application. Remove only
 # exact known copies (including duplicates from older cached builds), check
 # the target is otherwise pristine, then apply once. No checkout/reset.
@@ -249,6 +253,7 @@ git -C feeds/packages diff --quiet -- net/mwan3/files/lib/mwan3/mwan3.sh || {
   echo 'Unrecognized mwan3 edits; preserving source for inspection' >&2; exit 3;
 }
 patch --batch --fuzz=0 --forward -p1 -d feeds/packages < "$policy_patch"
+patch --batch --fuzz=0 --forward -p1 -d feeds/packages < "$lifecycle_patch"
 mwan_luci_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/luci-app-mwan3-route-metric.patch"
 if patch --dry-run --batch --fuzz=0 --forward -p1 -d feeds/luci < "$mwan_luci_patch" >/dev/null; then
   patch --batch --fuzz=0 --forward -p1 -d feeds/luci < "$mwan_luci_patch"
@@ -375,6 +380,7 @@ make package/feeds/qmodem/luci-app-qmodem-next/clean
 make package/luci-app-mlo/clean
 make package/network/services/hostapd/clean
 make package/feeds/luci/luci-app-mwan3/clean
+make package/feeds/packages/mwan3/clean
 make package/firmware/wireless-regdb/clean
 make package/feeds/packages/ksmbd-tools/clean
 make package/feeds/luci/luci-app-ksmbd/clean
@@ -597,6 +603,7 @@ required_overlay_files=(
   usr/lib/zbt/5g-adaptive.sh
   usr/lib/zbt/mwan-runtime.sh
   usr/lib/zbt/mwan-reconcile.sh
+  usr/sbin/zbt-mwan-standby-ready
   usr/sbin/zbt-mwan-failback
   usr/sbin/zbt-5g-adaptive
   etc/init.d/zbt-5g-adaptive
@@ -683,6 +690,14 @@ fi
 [ "$(grep -c 'metric=$(zbt_speed_metric' "${rootfs_dir}/lib/mwan3/mwan3.sh")" = 1 ] || {
   echo 'mwan3 image has missing/duplicated metric hook' >&2; exit 4;
 }
+for mwan_file in lib/mwan3/common.sh lib/mwan3/mwan3.sh usr/sbin/mwan3 etc/hotplug.d/iface/15-mwan3; do
+  cmp -s "feeds/packages/net/mwan3/files/$mwan_file" "${rootfs_dir}/$mwan_file" || {
+    echo "MWAN lifecycle code missing from built image: $mwan_file" >&2; exit 4;
+  }
+done
+for overlay_file in usr/lib/zbt/qmi-publish.sh usr/sbin/zbt-mwan-standby-ready; do
+  cmp -s "${FILES_OVERLAY_DIR}/$overlay_file" "${rootfs_dir}/$overlay_file" || exit 4
+done
 # A package/base-files install must expose exactly one modem LED owner. S97
 # deliberately runs after OpenWrt's generic S96 LED configuration service.
 [ "$(readlink "${rootfs_dir}/etc/rc.d/S97zbt-modem-leds")" = ../init.d/zbt-modem-leds ] || {

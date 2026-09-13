@@ -506,6 +506,13 @@ The second command downloads only the exact pinned public source files, tests fo
 
 ## Troubleshooting
 
+If a modem's bound speed test works but MultiWAN says `disabled / paused (31)`,
+that is missing WAN routing/tracker state, not proof of a bad SA/NSA choice.
+See the [Mega lifecycle fixes and SA/NSA research](firmware/docs/mega-mwan-lifecycle-and-radio-selection.md).
+Adaptive trials now keep unverified candidates out of IPv4/IPv6 client routing;
+Modem automatic remains the no-download-test option. User MultiWAN policies
+and Wi-Fi settings are preserved.
+
 ### A modem is not detected
 
 Check the physical USB paths and QModem state:
