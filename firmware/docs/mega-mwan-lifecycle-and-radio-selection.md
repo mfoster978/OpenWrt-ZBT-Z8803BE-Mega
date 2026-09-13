@@ -15,15 +15,27 @@ The source audit found and addressed these concrete failure paths:
 * Follow-up dump: a kernel CM default route can exist while MWAN table 3
   and its rules are absent. Reconciliation previously required netifd to
   already be up, so it could never repair a missed CM publication itself.
-  The health worker now re-publishes observed addresses/default routes for
-  owned `zbtqmi` interfaces that are up or pending and autostart-enabled,
-  then verifies netifd readback before the existing MWAN tracker refresh.
-  Physical ownership, fresh direct health and family are checked first.
-  Administrative stops, disabled tracking and pending configuration edits
-  remain untouched. Repeated checks do not emit repeated notifications.
-  This closes a reproduced recovery gap; the dump alone does not establish
-  whether the affected router has this state or an explicitly disabled UCI
-  setting. Neither state is inferred from the MWAN word `disabled` alone.
+  The first follow-up incorrectly treated netifd `autostart=false` as an
+  intentional administrative stop. The supplied live-router transcript
+  establishes the affected state exactly: `proto=none`, `up=false`,
+  `pending=false`, `autostart=false`, a working CM address/default route and
+  an enabled QModem session. The transcript's successful repair began with a
+  targeted `ifup 4_1`. Reconciliation now re-arms that generated logical
+  interface when and only when fresh device-bound Internet health and the
+  QModem global/per-slot enable settings agree. An explicitly disabled modem,
+  disabled MWAN tracking, bridge mode, foreign device, pending edit or failed
+  direct health remains untouched. Legacy `proto=none` uses its verified
+  kernel address without writing it to UCI; `zbtqmi` additionally publishes
+  and verifies external address/route readback.
+* The source of the stranded state was also present in the runtime: OpenWrt's
+  `/sbin/ifup` performs a global network reload before every targeted down/up.
+  Both QMI dialers called it for both address families during concurrent boot.
+  Their UCI/reload operations are now serialized, configuration is loaded once,
+  and direct ubus operations bring up only the selected slot. QMI session
+  cleanup/start also uses serialized targeted ubus down/up, without a global
+  reload. Generated QMI logical interfaces use `auto=0`, so an unrelated
+  reload cannot resurrect a stopped data session; QModem explicitly arms its
+  own interface when its supervised session starts.
 * MWAN3's generic resolver prefers an existing `4_1_4` dynamic child even
   when it is down and the base interface is up. Mega's explicitly owned
   `zbtqmi` interfaces now resolve to the exact parent where CM publishes.
@@ -105,7 +117,8 @@ backup loss, IPv6 requirements, cooldowns, rollback and command binding.
 `netifd-publish-image.sh` runs the pinned native netifd/ubus/UCI builds with
 the image's protocol libraries: backup first, primary pending with live CM
 addresses, IPv4/IPv6 publication recovery, no repeated notifications,
-unhealthy-path refusal, and preservation of administrative stops and backup.
+unhealthy-path refusal, explicit-QModem-disable preservation, and the reported
+legacy `proto=none` plus `autostart=false` recovery while backup stays online.
 The separate isolated `lan-policy-kernel.sh` test sends real IPv4/IPv6 packets
 from bridged veth clients through the pinned policy builder and reconciler;
 veth clients model Ethernet/Wi-Fi forwarding, not physical radio hardware.

@@ -1,0 +1,66 @@
+--- a/application/qmodem/files/usr/share/qmodem/modem_dial.sh
++++ b/application/qmodem/files/usr/share/qmodem/modem_dial.sh
+@@ -642,6 +642,12 @@ set_if()
+         proto="none"
+         protov6="none"
+     fi
++    qmi_netifd_lock=0
++    if [ "$proto" = zbtqmi ]; then
++        exec 1002>/var/lock/zbt-qmi-netifd.lock
++        flock 1002
++        qmi_netifd_lock=1
++    fi
+     case $pdp_type in
+         "ip")
+             env4="1"
+@@ -784,6 +790,12 @@ set_if()
+-            uci -q set network.$logical.proto=zbtqmi
+-            uci -q set network.$logical.modem_config="$modem_config"
+-            uci -q set network.$logical.device="$target_netcard"
+-            uci -q set network.$logical.ifname="$target_netcard"
++            qmi_current="$(uci -q get network.$logical.proto):$(uci -q get network.$logical.modem_config):$(uci -q get network.$logical.device):$(uci -q get network.$logical.ifname):$(uci -q get network.$logical.auto)"
++            if [ "$qmi_current" != "zbtqmi:$modem_config:$target_netcard:$target_netcard:0" ]; then
++                uci -q set network.$logical.proto=zbtqmi
++                uci -q set network.$logical.modem_config="$modem_config"
++                uci -q set network.$logical.device="$target_netcard"
++                uci -q set network.$logical.ifname="$target_netcard"
++                # A later global reload must not resurrect a logical interface
++                # whose supervised data session has stopped.
++                uci -q set network.$logical.auto=0
++                interface_update_flag=1
++            fi
+         done
+-        interface_update_flag=1
+@@ -821,6 +834,24 @@ set_if()
+         if [ "$bridge_network_dirty" -eq 1 ]; then
+             /etc/init.d/network reload
+             m_debug "network reload"
++        elif [ "$qmi_netifd_lock" -eq 1 ]; then
++            # Load the just-committed device/protocol once while both QMI
++            # slots serialize this operation. /sbin/ifup performs another
++            # global reload for every target and races concurrent dialers.
++            ubus -t 15 call network reload >/dev/null 2>&1
++            # Reload affects every auto=0 QMI interface, so re-arm all enabled
++            # QModem-owned slots while holding the shared lock, not only the
++            # worker whose configuration caused this reload.
++            for logical in 4_1 4_1v6 2_1 2_1v6; do
++                owner=${logical%v6}
++                [ "$(uci -q get network.$logical.proto)" = zbtqmi ] || continue
++                [ "$(uci -q get qmodem.main.enable_dial)" = 1 ] || continue
++                [ "$(uci -q get qmodem.$owner.enable_dial)" = 1 ] || continue
++                [ "$(uci -q get qmodem.$owner.state)" != disabled ] || continue
++                [ "$(uci -q get qmodem.$owner.en_bridge)" != 1 ] || continue
++                ubus -t 5 call network.interface up "{\"interface\":\"$logical\"}" >/dev/null 2>&1
++            done
++            m_debug "targeted QMI interfaces loaded"
+         else
+             ifup ${interface_name}
+             ifup ${interface6_name}
+@@ -838,6 +869,7 @@ set_if()
+         /etc/init.d/dhcp restart
+         m_debug "dhcp reload"
+     fi
++    [ "$qmi_netifd_lock" -ne 1 ] || flock -u 1002
+ }
+ 
+ flush_if()

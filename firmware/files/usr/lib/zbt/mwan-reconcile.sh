@@ -25,14 +25,18 @@ zbt_mwan_reconcile_iface() {
 	# Direct CM traffic can work while netifd is still waiting for its protocol
 	# notification. Recover that missing publication before asking MWAN to
 	# initialize; MWAN correctly refuses an unpublished/down logical interface.
-	if [ "$(uci -q get "network.$interface.proto")" = zbtqmi ]; then
-		if zbt_qmi_reconcile_publication "$section" "$family" "$health_device" "$index"; then
-			network_flush_cache
-		else
-			logger -t zbt-mwan-reconcile "iface=$interface family=$family direct_health=online action=check_publication result=not_ready_or_administratively_stopped"
-			return 0
-		fi
-	fi
+	local network_proto publication_result=0
+	network_proto=$(uci -q get "network.$interface.proto")
+	case "$network_proto" in
+		zbtqmi|none)
+			zbt_qmi_reconcile_publication "$section" "$family" "$health_device" "$index"
+			publication_result=$?
+			case "$publication_result" in 0|2) network_flush_cache ;; *)
+				logger -t zbt-mwan-reconcile "iface=$interface family=$family direct_health=online action=check_publication result=not_ready_or_modem_disabled"
+				return 0
+			;; esac
+			;;
+	esac
 	network_is_up "$interface" || {
 		logger -t zbt-mwan-reconcile "iface=$interface direct_health=online result=netifd_not_up tracker_not_promoted"
 		return 0
@@ -41,6 +45,12 @@ zbt_mwan_reconcile_iface() {
 	[ "$device" = "$health_device" ] && [ "$device" = "$(zbt_netdev "$section")" ] || return 0
 	if [ "$family" = 4 ]; then network_get_ipaddr address "$interface";
 	else network_get_ipaddr6 address "$interface"; fi
+	# Legacy proto=none reports its device but not CM's externally assigned
+	# address. Use only the same verified kernel address checked immediately
+	# below; no address or gateway is persisted into UCI.
+	if [ -z "$address" ] && [ "$network_proto" = none ]; then
+		address=$(ip -o -"$family" addr show dev "$device" scope global 2>/dev/null | awk '/ inet/ && !/ tentative| dadfailed/ { split($4,a,"/"); print a[1]; exit }')
+	fi
 	[ -n "$address" ] || return 0
 	# Do not fabricate reachability from a modem address or a default route.
 	# Confirm the published address is still on the verified physical device.

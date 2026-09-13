@@ -15,7 +15,14 @@ cp "$MEGA_TEST_ROOTFS/usr/share/libubox/jshn.sh" /usr/share/libubox/jshn.sh
 cp "$MEGA_TEST_ROOTFS/lib/netifd/netifd-proto.sh" "$MEGA_TEST_ROOTFS/lib/netifd/utils.sh" "$fixture/addons/"
 cp "$MEGA_TEST_REPO/firmware/files/lib/netifd/proto/zbtqmi.sh" "$fixture/addons/proto/"
 for name in ubus uci jshn; do install -m 755 "$MEGA_TEST_REPO/firmware/tests/image-tool-wrapper" "/usr/local/bin/$name"; done
-touch "$MEGA_TEST_CONFIG/network"
+touch "$MEGA_TEST_CONFIG/network" "$MEGA_TEST_CONFIG/qmodem"
+uci set qmodem.main=global
+uci set qmodem.main.enable_dial=1
+for slot in 4_1 2_1; do
+	uci set "qmodem.$slot=modem-device"
+	uci set "qmodem.$slot.enable_dial=1"
+done
+uci commit qmodem
 for interface in 4_1 4_1v6 2_1 2_1v6; do
 	case "$interface" in 4_1*) slot=4_1; device=qmitest ;; *) slot=2_1; device=qmitest2 ;; esac
 	uci set "network.$interface=interface"
@@ -86,10 +93,34 @@ unset -f ubus
 echo 'PASS: repeated repair emits no notify_proto; unhealthy direct path is not published'
 ubus call network.interface.4_1 down
 sleep 1
+ip addr replace 192.0.0.2/27 dev qmitest
+ip route replace default via 192.0.0.1 dev qmitest metric 200
+# A direct administrative down is stale when QModem itself remains enabled
+# and its device-bound Internet health is fresh.
+zbt_qmi_reconcile_publication 4_1 4 qmitest "$qmi_ifindex"
+ubus call network.interface.4_1 status | jq -e '.up==true and .autostart==true' >/dev/null
+ubus call network.interface.4_1 down
+ip addr replace 192.0.0.2/27 dev qmitest
+ip route replace default via 192.0.0.1 dev qmitest metric 200
+uci set qmodem.4_1.enable_dial=0
+uci commit qmodem
 if zbt_qmi_reconcile_publication 4_1 4 qmitest "$qmi_ifindex"; then exit 1; fi
 ubus call network.interface.4_1 status | jq -e '.up==false and .autostart==false' >/dev/null
 ubus call network.interface.4_1v6 status | jq -e '.up==true' >/dev/null
 ubus call network.interface.2_1 status | jq -e '.up==true and .["ipv4-address"][0].address=="10.233.98.190"' >/dev/null
 ubus call network.interface.2_1v6 status | jq -e '.up==true' >/dev/null
-echo 'PASS: administrative stop remains stopped; other family stays online'
-echo 'PASS: backup-first dual-slot publication; primary repair/administrative stop leaves backup online'
+echo 'PASS: a live QModem session re-arms stale netifd down; a disabled QModem remains down and backup stays online'
+uci set qmodem.4_1.enable_dial=1
+uci set network.4_1.proto=none
+uci set network.4_1.device=qmitest
+uci commit qmodem
+uci commit network
+ubus call network reload >/dev/null
+ubus call network.interface.4_1 down >/dev/null
+ip addr replace 192.0.0.2/27 dev qmitest
+ip route replace default via 192.0.0.1 dev qmitest metric 200
+legacy_result=0
+zbt_qmi_reconcile_publication 4_1 4 qmitest "$qmi_ifindex" || legacy_result=$?
+[ "$legacy_result" = 2 ]
+ubus call network.interface.4_1 status | jq -e '.up==true and .autostart==true and .proto=="none" and (.l3_device=="qmitest" or .device=="qmitest")' >/dev/null
+echo 'PASS: reproduced field state proto=none/autostart=false with live CM route and repaired it by targeted logical ifup'

@@ -29,16 +29,18 @@ zbt_qmi_flush() {
 
 zbt_qmi_notify() {
 	local action="$1" interface
+	exec 1002>/var/lock/zbt-qmi-netifd.lock
+	flock 1002
 	for interface in "$interface_name" "$interface6_name"; do
 		# An edited alias must never make a stale dialer stop LAN/another WAN.
 		case "$interface" in "$modem_config"|"${modem_config}v6") ;; *) continue ;; esac
 		[ "$(uci -q get "network.$interface.modem_config")" = "$modem_config" ] || continue
-		if [ "$action" = up ]; then
-			ifup "$interface" >/dev/null 2>&1
-		else
-			ifdown "$interface" >/dev/null 2>&1
-		fi
+		# /sbin/ifup reloads every network interface before its target. Two
+		# simultaneous modem sessions can therefore leave the first slot down.
+		# The UCI configuration was loaded by set_if; change only this interface.
+		ubus -t 5 call network.interface "$action" "{\"interface\":\"$interface\"}" >/dev/null 2>&1
 	done
+	flock -u 1002
 }
 
 zbt_qmi_child_alive() {

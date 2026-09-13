@@ -37,20 +37,45 @@ zbt_qmi_publish() {
 }
 
 # Re-publish an already working CM data path after a missed netifd update.
-# Never start an administratively stopped interface or touch modem settings.
+# Never start a QModem-disabled interface or touch modem/radio settings.
 zbt_qmi_reconcile_publication() (
-	local modem_config="$1" family="$2" modem_netcard="$3" qmi_ifindex="$4" interface status
+	local modem_config="$1" family="$2" modem_netcard="$3" qmi_ifindex="$4" interface status proto
 	interface=$modem_config
 	[ "$family" != 6 ] || interface=${modem_config}v6
-	[ "$(uci -q get "network.$interface.proto")" = zbtqmi ] || return 1
+	proto=$(uci -q get "network.$interface.proto")
+	case "$proto" in zbtqmi|none) ;; *) return 1 ;; esac
 	[ "$(uci -q get "network.$interface.modem_config")" = "$modem_config" ] || return 1
 	status=$(ubus -t 3 call "network.interface.$interface" status) || return 1
-	printf '%s' "$status" | jq -e '.autostart == true and .available == true and (.up == true or .pending == true)' >/dev/null || return 1
+	printf '%s' "$status" | jq -e '.available == true' >/dev/null || return 1
 	zbt_qmi_owned() {
 		zbt_health_online "$modem_config" &&
 		[ "$(zbt_netdev "$modem_config")" = "$modem_netcard" ] &&
 		[ "$(cat "${ZBT_SYSFS:-/sys}/class/net/$modem_netcard/ifindex" 2>/dev/null)" = "$qmi_ifindex" ] &&
 		[ ! -e "${ZBT_SYSFS:-/sys}/class/net/$modem_netcard/master" ]
 	}
+	zbt_qmi_owned || return 1
+	# QModem's enabled data session, not netifd's stale autostart bit, is the
+	# administrative authority for these generated logical interfaces. The
+	# stock ifup helper performs a global reload before a targeted up and can
+	# leave one of two concurrent modems down while its CM path keeps working.
+	if ! printf '%s' "$status" | jq -e '.autostart == true and (.up == true or .pending == true)' >/dev/null; then
+		[ "$(uci -q get qmodem.main.enable_dial)" = 1 ] || return 1
+		[ "$(uci -q get "qmodem.$modem_config.enable_dial")" = 1 ] || return 1
+		[ "$(uci -q get "qmodem.$modem_config.state")" != disabled ] || return 1
+		[ "$(uci -q get "qmodem.$modem_config.en_bridge")" != 1 ] || return 1
+		ubus -t 5 call network.interface up "{\"interface\":\"$interface\"}" >/dev/null 2>&1 || return 1
+		status=$(ubus -t 3 call "network.interface.$interface" status) || return 1
+		printf '%s' "$status" | jq -e '.autostart == true and (.up == true or .pending == true)' >/dev/null || return 1
+		logger -t zbt-mwan-reconcile "iface=$interface family=$family device=$modem_netcard action=rearm_generated_interface result=verified"
+	fi
+	# Older settings-preserving installs used proto=none with CM owning the
+	# address. Re-arming that exact interface is sufficient for MWAN; it has no
+	# protocol handler to receive external-address publication.
+	if [ "$proto" = none ]; then
+		if printf '%s' "$status" | jq -e --arg d "$modem_netcard" '.up == true and (.l3_device == $d or .device == $d)' >/dev/null; then
+			return 2
+		fi
+		return 1
+	fi
 	zbt_qmi_publish "$family" "$interface" repair
 )

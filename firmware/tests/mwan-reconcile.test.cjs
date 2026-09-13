@@ -32,10 +32,11 @@ zbt_health_now() { echo 1010; }; zbt_mwan_now() { echo 1010; }
 network_flush_cache() { :; }
 network_is_up() { [ "$NO_LINK" != 1 ]; }
 network_get_device() { eval "$1=wwan3"; }
-network_get_ipaddr() { eval "$1=10.0.0.2"; }
+network_get_ipaddr() { [ "$NO_NETIFD_ADDRESS" = 1 ] || eval "$1=10.0.0.2"; }
 zbt_qmi_reconcile_publication() {
   [ "$PUBLICATION_FAIL" != 1 ] || return 1
   if [ "$NO_LINK" = 1 ]; then echo "publish $*" >> "$DB/calls"; NO_LINK=0; fi
+  [ "$LEGACY" != 1 ] || return 2
 }
 config_foreach() { if [ "$2" = interface ]; then "$1" 4_1; "$1" 2_1; else "$1" failover; fi; }
 config_list_foreach() { "$3" backup; }
@@ -107,6 +108,11 @@ test('working CM with missing netifd publication is repaired before paused MWAN 
   assert.equal(f.calls,'publish 2_1 4 wwan3 23\nifup 2_1\nroute 2_1 wwan3\nrules 2_1 wwan3\nstate 2_1 online\nbuild\n');
   assert.equal(run(before,{NO_LINK:'1',PUBLICATION_FAIL:'1'}).calls,'');
   assert.equal(run(before+'; echo 0 > "$DB/uci/mwan3.2_1.enabled"',{NO_LINK:'1'}).calls,'');
+});
+test('reported proto=none/autostart=false state uses verified kernel address after targeted rearm',()=>{
+  const before='echo none > "$DB/uci/network.2_1.proto"; echo disabled > "$DB/track/2_1/STATUS"; echo 0 > "$DB/track/2_1/STARTED"';
+  const f=run(before,{NO_LINK:'1',NO_NETIFD_ADDRESS:'1',LEGACY:'1',NO_TABLE:'1',AUTO_ONLINE:'1'});
+  assert.equal(f.calls,'publish 2_1 4 wwan3 23\nifup 2_1\nroute 2_1 wwan3\nrules 2_1 wwan3\nstate 2_1 online\nbuild\n');
 });
 test('active offline, stale, dead or intentionally disabled trackers are never promoted',()=>{
   for (const change of ['echo 800 > "$DB/track/2_1/TIME"',

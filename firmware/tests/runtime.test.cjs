@@ -613,6 +613,19 @@ test('QModem consumes and preserves MWAN-owned network metrics across redial', {
   assert.match(ui, /uci\.load\('network'\)/);
 });
 
+test('dual QMI startup serializes netifd loading and never uses global-reloading ifup for owned links', { skip: !process.env.QMODEM_TEST_TREE }, () => {
+  const dialer = patchedFile('application/qmodem/files/usr/share/qmodem/modem_dial.sh');
+  const setIf = dialer.slice(dialer.indexOf('\nset_if()') + 1, dialer.indexOf('\nflush_if()'));
+  assert.match(setIf, /exec 1002>\/var\/lock\/zbt-qmi-netifd\.lock\s+flock 1002/);
+  assert.match(setIf, /uci -q set network\.\$logical\.auto=0/);
+  assert.match(setIf, /ubus -t 15 call network reload[\s\S]*ubus -t 5 call network\.interface up/);
+  assert.ok(setIf.indexOf('flock 1002') < setIf.indexOf('uci commit network'));
+  assert.ok(setIf.indexOf('uci commit network') < setIf.indexOf('flock -u 1002'));
+  const session = file('firmware/files/usr/lib/zbt/qmi-session.sh');
+  assert.match(session, /zbt_qmi_notify\(\)[\s\S]*zbt-qmi-netifd\.lock[\s\S]*ubus -t 5 call network\.interface "\$action"/);
+  assert.doesNotMatch(session.slice(session.indexOf('zbt_qmi_notify()'), session.indexOf('zbt_qmi_child_alive()')), /\n\s*if(?:up|down)\s/);
+});
+
 test('MWAN3 interface UI edits the persistent network metric', { skip: !process.env.MWAN3_LUCI_TEST_TREE }, () => {
   const tree = process.env.MWAN3_LUCI_TEST_TREE;
   const uiSource = fs.readFileSync(path.join(tree,

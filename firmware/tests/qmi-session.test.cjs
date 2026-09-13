@@ -48,8 +48,15 @@ ip() {
     *) printf 'ip %s\n' "$*" >> "$DB/calls" ;;
   esac
 }
-ifup() { printf 'up %s\n' "$1" >> "$DB/calls"; }
-ifdown() { printf 'down %s\n' "$1" >> "$DB/calls"; }
+flock() { :; }
+ubus() {
+  case "$*" in
+    *'network.interface up'*4_1v6*) echo 'up 4_1v6' >> "$DB/calls" ;;
+    *'network.interface up'*4_1*) echo 'up 4_1' >> "$DB/calls" ;;
+    *'network.interface down'*4_1v6*) echo 'down 4_1v6' >> "$DB/calls" ;;
+    *'network.interface down'*4_1*) echo 'down 4_1' >> "$DB/calls" ;;
+  esac
+}
 logger() { printf 'log %s\n' "$*" >> "$DB/calls"; }
 sleep() {
   local now
