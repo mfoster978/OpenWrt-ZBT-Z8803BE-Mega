@@ -131,6 +131,7 @@ uci() {
 	[ "$1" != -q ] || shift
 	[ "$1" != changes ] || return 0
 	case "$2" in
+		mwan3.4_1.enabled|mwan3.2_1.enabled|mwan3.4_1v6.enabled|mwan3.2_1v6.enabled) echo 1 ;;
 		mwan3.4_1.family|mwan3.2_1.family) echo ipv4 ;;
 		mwan3.4_1v6.family|mwan3.2_1v6.family) echo ipv6 ;;
 		network.4_1.modem_config|network.4_1v6.modem_config) echo 4_1 ;;
