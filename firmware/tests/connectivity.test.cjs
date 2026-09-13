@@ -96,7 +96,7 @@ test('NSA enables LTE anchor before disabling SA and only touches the selected m
   assert.doesNotMatch(commands, /band|ttyMODEM2/);
 });
 test('already-active policy performs no modem write', () => {
-  for (const [mode, rat, policy] of [['0', 'AUTO', 'auto_preferred'], ['1', 'LTE:NR5G', 'nsa'], ['2', 'NR5G', 'sa']]) {
+  for (const [mode, rat, policy] of [['0', 'AUTO', 'auto_adaptive'], ['1', 'LTE:NR5G', 'nsa'], ['2', 'AUTO', 'sa']]) {
     const { out, commands } = apply(radioFixture(mode, rat), policy);
     assert.match(out, /status=0 changed=0/);
     assert.doesNotMatch(commands, /",/);

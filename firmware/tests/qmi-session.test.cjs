@@ -9,7 +9,8 @@ const root = path.resolve(__dirname, '../..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mega-qmi-session-'));
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 let serial = 0;
-const helper = fs.readFileSync(path.join(root, 'firmware/files/usr/lib/zbt/qmi-session.sh'), 'utf8');
+const helper = fs.readFileSync(path.join(root, 'firmware/files/usr/lib/zbt/qmi-session.sh'), 'utf8')
+  .replace('. /usr/lib/zbt/mwan-runtime.sh', 'zbt_mwan_refresh() { :; }'); // separately exercised by adaptive tests
 const dual = fs.readFileSync(path.join(root, 'firmware/files/usr/lib/zbt/dual-modem.sh'), 'utf8');
 
 function fixture(options = {}, body = 'zbt_qmi_session "$DB/child"; echo result=$?') {

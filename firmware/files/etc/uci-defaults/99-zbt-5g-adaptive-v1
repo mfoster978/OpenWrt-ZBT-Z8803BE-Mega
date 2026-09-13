@@ -1,0 +1,14 @@
+#!/bin/sh
+# Upgrade only legacy automatic policy; explicit manual selections survive.
+changed=0
+for section in 4_1 2_1; do
+	[ "$(uci -q get "qmodem.$section")" = modem-device ] || continue
+	case "$(uci -q get "qmodem.$section.zbt_5g_policy")" in
+		''|auto_preferred)
+			uci -q set "qmodem.$section.zbt_5g_policy=auto_adaptive"
+			changed=1 ;;
+	esac
+done
+[ "$changed" = 0 ] || uci -q commit qmodem
+/etc/init.d/zbt-5g-adaptive enable
+exit 0

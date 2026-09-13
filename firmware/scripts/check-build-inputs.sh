@@ -188,7 +188,7 @@ grep -Fq "return uci.load('qmodem').then" firmware/patches/qmodem-mega-policy-ui
 grep -Fq 'NSA only — LTE-anchored 5G speed comparison' firmware/patches/qmodem-performance-ui.patch
 grep -Fq "name: _('Preferred Bands')" firmware/patches/qmodem-performance-ui.patch
 grep -Fq "''|4_1|2_1|modem1|modem2)" firmware/files/usr/sbin/zbt-qmodem-profile
-grep -Fq 'zbt_5g_policy=auto_preferred' firmware/files/usr/sbin/zbt-qmodem-profile
+grep -Fq 'zbt_5g_policy=auto_adaptive' firmware/files/usr/sbin/zbt-qmodem-profile
 test -x firmware/files/usr/sbin/zbt-qmodem-performance-policy
 grep -Fq '. /usr/lib/zbt/qmodem-5g.sh' firmware/files/usr/sbin/zbt-qmodem-performance-policy
 test -x firmware/files/usr/libexec/rpcd/zbt.speedify

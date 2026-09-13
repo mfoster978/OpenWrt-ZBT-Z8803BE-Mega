@@ -16,6 +16,8 @@ luci-proto-qmi
 luci-proto-mbim
 quectel-CM-5G-M
 mwan3
+conntrack
+flock
 luci-app-mwan3
 tailscale
 luci-app-tailscale

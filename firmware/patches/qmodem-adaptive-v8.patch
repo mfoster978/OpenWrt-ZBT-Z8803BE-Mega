@@ -1,0 +1,59 @@
+--- a/luci/luci-app-qmodem-next/htdocs/luci-static/resources/view/qmodem/config_advanced.js
++++ b/luci/luci-app-qmodem-next/htdocs/luci-static/resources/view/qmodem/config_advanced.js
+@@ -376,7 +376,7 @@
+ 			_('View the active 5G connection type and network priority. Opening this page is read-only; the modem changes only after you press Apply.'));
+ 		container.appendChild(description);
+ 		container.appendChild(E('div', { 'class': 'alert-message info', 'style': 'margin: 12px;' },
+-			_('Automatic preferred allows the modem and network to choose LTE, standalone 5G (SA), or LTE-anchored 5G (NSA). NSA only and SA only are optional comparisons, not guaranteed speed improvements. MultiWAN alone selects the primary Internet connection.')));
++			_('Automatic adaptive compares verified SA and NSA download samples when this modem is idle and another WAN is online. It retains a mode only after a stable improvement. MultiWAN alone selects the primary Internet connection. Opening this page is read-only.')));
+ 
+ 		// Quectel exposes SA/NSA availability separately from its band masks.
+ 		// Reading this control never changes the modem, and Apply is a no-op
+@@ -390,8 +390,8 @@
+ 			'id': 'deployment_select_' + modem.id,
+ 			'disabled': true
+ 		}, [
+-			E('option', { 'value': 'auto_preferred' }, _('Automatic preferred — modem/network selection')),
+-			E('option', { 'value': 'auto' }, _('Automatic — SA + NSA')),
++			E('option', { 'value': 'auto_adaptive' }, _('Automatic adaptive — measured SA/NSA preference')),
++			E('option', { 'value': 'auto' }, _('Modem automatic — no performance tests')),
+ 			E('option', { 'value': 'nsa' }, _('NSA only — LTE-anchored 5G speed comparison')),
+ 			E('option', { 'value': 'sa' }, _('SA only — standalone 5G'))
+ 		]);
+@@ -421,7 +421,7 @@
+ 				return self.load5gDeployment(modem, deploymentCurrent, deploymentSelect, deploymentApply);
+ 			} }, _('Read settings again'))]));
+ 		deploymentField.appendChild(E('div', { 'class': 'cbi-value-description' },
+-			_('Automatic restores automatic network selection and allows SA plus NSA. Selecting NSA also enables its required LTE anchor if necessary. Settings are read before writing and changes are verified; a failed change attempts to restore the previous settings. Band lists are never rewritten here. A change can briefly interrupt this modem.')));
++			_('Adaptive starts with automatic network selection and uses three 25 MB downloads per mode: up to 150 MB per comparison, 300 MB per modem per 24 hours plus protocol overhead, and at most one comparison per hour. It waits for idle traffic and a healthy backup, requires every candidate sample to improve by 15%, and restores the last verified mode if a trial fails. Choose Modem automatic to disable performance tests. Manual NSA enables its LTE anchor; SA disables NSA while retaining automatic network selection. Band lists and APNs are never rewritten. A change can briefly interrupt this modem.')));
+ 		deploymentSection.appendChild(deploymentField);
+ 		container.appendChild(deploymentSection);
+ 		var deploymentRead = self.load5gDeployment(modem, deploymentCurrent, deploymentSelect, deploymentApply);
+@@ -568,8 +568,8 @@
+ 			sa: _('SA only — standalone 5G')
+ 		};
+ 		var policyLabels = {
+-			auto_preferred: _('Automatic preferred'),
+-			auto: _('Automatic — SA + NSA'),
++			auto_adaptive: _('Automatic adaptive'),
++			auto: _('Modem automatic — no performance tests'),
+ 			nsa: _('NSA only'),
+ 			sa: _('SA only')
+ 		};
+@@ -577,6 +577,7 @@
+ 			if (!result || !result.deployment)
+ 				throw new Error(_('QModem returned no 5G settings object. Check that the QModem backend matches this firmware and that its RPC service is running.'));
+ 			var deployment = result.deployment;
++			if (deployment.policy === 'auto_preferred') deployment.policy = 'auto_adaptive';
+ 			if (!deployment || String(deployment.supported) !== '1' || !activeLabels[deployment.mode]) {
+ 				currentValue.textContent = (deployment && deployment.message) || _('Could not read the 5G setting. This does not mean the modem is unsupported. Retry after the modem finishes connecting.');
+ 				if (deployment && deployment.read_response)
+@@ -594,6 +595,8 @@
+ 				currentValue.textContent += ' ' + _('Allowed network types: %s.').format(deployment.network_mode);
+ 			if (deployment.data_state)
+ 				currentValue.textContent += '\n' + deployment.data_state;
++			if (deployment.adaptive_status && policy === 'auto_adaptive')
++				currentValue.textContent += '\n' + deployment.adaptive_status;
+ 			select.value = policy;
+ 			select.disabled = false;
+ 			applyButton.disabled = false;

@@ -2,7 +2,7 @@
 # Shared by the Mega RPC and boot policy. Never changes a band mask, APN,
 # SIM, cell lock or routing metric. All writes require valid prior readback.
 zbt_5g_value() {
-	case "$1" in auto_preferred|auto) echo 0 ;; nsa) echo 1 ;; sa) echo 2 ;; *) return 1 ;; esac
+	case "$1" in auto_adaptive|auto_preferred|auto) echo 0 ;; nsa) echo 1 ;; sa) echo 2 ;; *) return 1 ;; esac
 }
 
 zbt_5g_deployment_name() {
@@ -12,7 +12,7 @@ zbt_5g_deployment_name() {
 zbt_5g_policy() {
 	local policy
 	policy=$(uci -q get "qmodem.$config_section.zbt_5g_policy")
-	case "$policy" in auto_preferred|auto|nsa|sa) ;; *) policy=auto_preferred ;; esac
+	case "$policy" in auto|nsa|sa) ;; *) policy=auto_adaptive ;; esac
 	printf '%s\n' "$policy"
 }
 
@@ -82,11 +82,9 @@ zbt_5g_apply() {
 	old_mode=$zbt_5g_read_value
 	zbt_5g_read mode_pref || return 1
 	old_rat=$zbt_5g_read_value; target_rat=$old_rat
-	case "$requested:$old_rat" in
-		auto_preferred:*|auto:*) target_rat=AUTO ;;
-		nsa:AUTO|nsa:*LTE:NR5G*|nsa:NR5G:LTE|sa:AUTO|sa:*NR5G*) ;;
-		nsa:*) target_rat=LTE:NR5G ;;
-		sa:*) target_rat=AUTO ;;
+	case "$requested" in
+		nsa) target_rat=LTE:NR5G ;;
+		*) target_rat=AUTO ;;
 	esac
 	# Enable a compatible RAT before selecting NSA: disabling SA on a modem
 	# restricted to NR5G alone otherwise leaves no LTE anchor for data service.
@@ -140,6 +138,9 @@ zbt_get_5g_deployment() {
 	json_add_string mode "$mode"
 	json_add_string network_mode "$rat"
 	json_add_string data_state "$data_state"
+	case "$config_section" in
+		4_1|2_1) json_add_string adaptive_status "$(head -c 1024 "/tmp/zbt-5g/$config_section/status" 2>/dev/null)" ;;
+	esac
 	json_add_string read_response "$diagnostic"
 	json_add_string message 'Could not read the 5G setting. This is not proof that the modem lacks support. Check its AT connection and retry.'
 	json_close_object; json_dump
@@ -147,9 +148,17 @@ zbt_get_5g_deployment() {
 
 zbt_set_5g_deployment() {
 	local requested="$1" status=0
+	. /usr/lib/zbt/5g-state.sh
+	[ "$requested" != auto_preferred ] || requested=auto_adaptive
+	zbt_5g_message='Automatic comparison is in progress. Retry after it finishes; no setting was changed.'
+	if zbt_5g_lock; then
 	if zbt_5g_apply "$requested"; then
 		if zbt_remember_5g_policy "$requested"; then status=1
+			rm -f "$zbt_5g_dir/verified" "$zbt_5g_dir/rollback" "$zbt_5g_dir/maintenance"
+			printf '%s\n' 'Policy saved; waiting for a stable, idle Internet connection.' > "$zbt_5g_dir/status"
 		else zbt_5g_message='Modem settings verified, but the policy could not be saved. Read the current settings before retrying.'; fi
+	fi
+	zbt_5g_unlock
 	fi
 	json_init; json_add_object result
 	json_add_string status "$status"

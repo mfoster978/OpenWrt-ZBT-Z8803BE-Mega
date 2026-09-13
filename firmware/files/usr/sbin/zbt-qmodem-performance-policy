@@ -3,6 +3,7 @@
 . /usr/share/qmodem/modem_util.sh
 . /usr/lib/zbt/dual-modem.sh
 . /usr/lib/zbt/qmodem-5g.sh
+. /usr/lib/zbt/5g-state.sh
 
 section_ready() {
 	case "$1" in 4_1|2_1) ;; *) return 1 ;; esac
@@ -18,17 +19,32 @@ section_ready() {
 apply_policy() {
 	local section="$1" policy
 	section_ready "$section" || return 1
-	policy=$(uci -q get "qmodem.$section.zbt_5g_policy")
-	[ -n "$policy" ] || policy=auto_preferred
+	# An adaptive trial owns this modem's radio while a supervised redial may
+	# run concurrently. Do not reset its candidate or race the UI transaction.
+	zbt_5g_lock || return 0
+	policy=$(zbt_5g_policy)
+	if [ "$policy" = auto_adaptive ]; then
+		. /usr/lib/zbt/mwan-runtime.sh
+		policy=$(zbt_5g_hint)
+		# Once a learned mode loses Internet, a fresh data call starts with
+		# automatic selection again. A trial holds the lock and skips this hook.
+		if [ ! -f "$zbt_5g_dir/rollback" ] && ! zbt_mwan_online "$section"; then
+			policy=auto
+			rm -f "$zbt_5g_dir/verified"
+		fi
+	fi
 	if zbt_5g_apply "$policy"; then
 		logger -t zbt-5g-policy "$section policy $policy: $zbt_5g_message"
+		zbt_5g_unlock
 	else
 		logger -t zbt-5g-policy "$section policy not applied: $zbt_5g_message"
+		zbt_5g_unlock
 		return 1
 	fi
 }
 
 case "$1" in
+	library) return 0 2>/dev/null || exit 0 ;;
 	desired) zbt_5g_value "$3" ;;
 	query) section_ready "$2" && zbt_5g_read nr5g_disable_mode && echo "$zbt_5g_read_value" ;;
 	apply) apply_policy "$2" ;;

@@ -59,7 +59,7 @@ fi
 # Reverse only our exact known patches. Do not reset an entire checkout or
 # discard unrelated local edits while preparing a cached build.
 if ! git -C feeds/qmodem diff --quiet; then
-  for patch_name in qmodem-session-lifecycle-v7.patch qmodem-radio-rpc-v6.patch qmodem-at-transport-v6.patch qmodem-connectivity-v5.patch qmodem-mega-policy-ui.patch qmodem-performance-ui.patch qmodem-5g-deployment.patch qmodem-cell-discovery.patch qmodem-dual-runtime.patch; do
+  for patch_name in qmodem-adaptive-v8.patch qmodem-session-lifecycle-v7.patch qmodem-radio-rpc-v6.patch qmodem-at-transport-v6.patch qmodem-connectivity-v5.patch qmodem-mega-policy-ui.patch qmodem-performance-ui.patch qmodem-5g-deployment.patch qmodem-cell-discovery.patch qmodem-dual-runtime.patch; do
     stack_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/$patch_name"
     # --force disables GNU patch's automatic reversal guessing. In batch
     # mode alone an absent patch can be applied while asking to reverse it.
@@ -157,7 +157,7 @@ elif ! patch --dry-run --batch --fuzz=0 --reverse -p1 -d feeds/qmodem < "$policy
 fi
 connectivity_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/qmodem-connectivity-v5.patch"
 patch --batch --fuzz=0 --forward -p1 -d feeds/qmodem < "$connectivity_patch"
-for patch_name in qmodem-at-transport-v6.patch qmodem-radio-rpc-v6.patch qmodem-session-lifecycle-v7.patch; do
+for patch_name in qmodem-at-transport-v6.patch qmodem-radio-rpc-v6.patch qmodem-session-lifecycle-v7.patch qmodem-adaptive-v8.patch; do
   patch --batch --fuzz=0 --forward -p1 -d feeds/qmodem < "$(dirname "${FILES_OVERLAY_DIR}")/patches/$patch_name"
 done
 for apn in broadband NXTGENPHONE ENHANCEDPHONE firstnet-broadband fast.t-mobile.com vzwinternet h2g2 h2g2-t usccinternet; do
@@ -576,6 +576,14 @@ cmp "${CUSTOM_FEED_DIR}/luci-app-speedtest-lite/htdocs/luci-static/resources/vie
 cmp "${CUSTOM_FEED_DIR}/luci-app-speedtest-lite/htdocs/luci-static/resources/view/speedtest-lite/style.css" \
   "${rootfs_dir}/www/luci-static/resources/view/speedtest-lite/style.css"
 required_overlay_files=(
+  usr/lib/zbt/5g-state.sh
+  usr/lib/zbt/5g-adaptive.sh
+  usr/lib/zbt/mwan-runtime.sh
+  usr/sbin/zbt-mwan-failback
+  usr/sbin/zbt-5g-adaptive
+  etc/init.d/zbt-5g-adaptive
+  etc/hotplug.d/iface/90-zbt-mwan-failback
+  etc/uci-defaults/99-zbt-5g-adaptive-v1
   etc/uci-defaults/99-zbt-modem-route-v5
   usr/lib/zbt/qmodem-5g.sh
   usr/libexec/rpcd/zbt.speedify
@@ -634,9 +642,17 @@ for overlay_file in "${required_overlay_files[@]}"; do
   fi
 done
 echo "Validated files overlay in root filesystem: ${rootfs_dir}"
+for component in usr/sbin/zbt-5g-adaptive usr/sbin/zbt-mwan-failback usr/sbin/conntrack usr/bin/util-linux-flock; do
+  test -x "${rootfs_dir}/$component" || { echo "Missing adaptive/failback executable: $component" >&2; exit 4; }
+done
+[ "$(readlink "${rootfs_dir}/etc/rc.d/S99zbt-5g-adaptive")" = ../init.d/zbt-5g-adaptive ] || {
+  echo 'Adaptive worker lacks its boot service link' >&2; exit 4;
+}
+grep -Fq 'Automatic adaptive — measured SA/NSA preference' \
+  "${rootfs_dir}/www/luci-static/resources/view/qmodem/config_advanced.js" || exit 4
 test -x "${rootfs_dir}/usr/sbin/zbt-speedify-guard" &&
   test -x "${rootfs_dir}/etc/init.d/zbt-speedify-guard" || exit 4
-for overlay_file in usr/lib/zbt/qmodem-5g.sh usr/lib/zbt/qmi-session.sh usr/sbin/zbt-wifi-firstboot etc/init.d/zbt-wifi-firstboot etc/uci-defaults/71-zbt-wifi-firstboot usr/lib/zbt/mwan3-speed-metric.sh usr/libexec/rpcd/zbt.speedify usr/share/rpcd/acl.d/zbt-speedify.json usr/share/zbt/speedify-luci-wrapper.js usr/lib/zbt/speedify-routing.sh usr/sbin/zbt-speedify-guard etc/init.d/zbt-speedify-guard etc/uci-defaults/99-zbt-modem-route-v5; do
+for overlay_file in usr/lib/zbt/5g-state.sh usr/lib/zbt/5g-adaptive.sh usr/lib/zbt/mwan-runtime.sh usr/sbin/zbt-mwan-failback usr/sbin/zbt-5g-adaptive etc/init.d/zbt-5g-adaptive etc/hotplug.d/iface/90-zbt-mwan-failback etc/uci-defaults/99-zbt-5g-adaptive-v1 usr/lib/zbt/qmodem-5g.sh usr/lib/zbt/qmi-session.sh usr/sbin/zbt-wifi-firstboot etc/init.d/zbt-wifi-firstboot etc/uci-defaults/71-zbt-wifi-firstboot usr/lib/zbt/mwan3-speed-metric.sh usr/libexec/rpcd/zbt.speedify usr/share/rpcd/acl.d/zbt-speedify.json usr/share/zbt/speedify-luci-wrapper.js usr/lib/zbt/speedify-routing.sh usr/sbin/zbt-speedify-guard etc/init.d/zbt-speedify-guard etc/uci-defaults/99-zbt-modem-route-v5; do
   cmp "${FILES_OVERLAY_DIR}/${overlay_file}" "${rootfs_dir}/${overlay_file}" || exit 4
 done
 # Check the actual installed dialer and authoritative board defaults, not

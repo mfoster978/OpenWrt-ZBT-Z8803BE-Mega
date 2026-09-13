@@ -1,0 +1,52 @@
+#!/bin/sh
+# Actual built ARM64 UCI, isolated files only. No live router is accessed.
+set -eu
+: "${MEGA_TEST_ROOTFS:?extracted image required}"
+: "${MEGA_TEST_REPO:?repository required}"
+fixture=$(mktemp -d)
+trap 'rm -rf "$fixture"' EXIT
+mkdir "$fixture/config" "$fixture/delta"
+uci() { qemu-aarch64 -L "$MEGA_TEST_ROOTFS" "$MEGA_TEST_ROOTFS/sbin/uci" -c "$fixture/config" -t "$fixture/delta" "$@"; }
+logger() { :; }
+for package in network qmodem firewall mwan3 modem_watchdog; do touch "$fixture/config/$package"; done
+uci set modem_watchdog.global=global
+for interface in wan_sfp wan usb_tether 4_1 2_1 lan; do uci set "network.$interface=interface"; done
+for section in 4_1 2_1; do
+	uci set "qmodem.$section=modem-device"
+	uci set "qmodem.$section.zbt_5g_policy=auto_preferred"
+	uci set "qmodem.$section.apn=example.invalid"
+done
+uci set qmodem.2_1.zbt_5g_policy=nsa
+uci set mwan3.failover=policy
+# Reproduce the transcript's broken scalar, not an already-correct fixture.
+uci set 'mwan3.failover.use_member=failover_4_1 failover_2_1'
+uci commit
+ZBT_MWAN_NO_RELOAD=1
+export ZBT_MWAN_NO_RELOAD
+set -- failover
+. "$MEGA_TEST_REPO/firmware/files/usr/sbin/zbt-mwan-preset"
+expected='failover_wan_sfp failover_wan failover_usb_tether failover_4_1 failover_2_1'
+[ "$(uci get mwan3.failover.use_member)" = "$expected" ]
+[ "$(uci export mwan3 | grep -c 'list use_member')" = 10 ]
+metric=0
+for interface in wan_sfp wan usb_tether 4_1 2_1; do
+	metric=$((metric+1))
+	[ "$(uci get "mwan3.failover_$interface.metric")" = "$metric" ]
+done
+[ "$(uci get mwan3.default_rule.use_policy)" = failover ]
+for section in 4_1 2_1; do
+	if uci -q get "network.$section.device"; then exit 1; fi
+	if uci -q get "network.$section.ifname"; then exit 1; fi
+	[ "$(uci get "qmodem.$section.apn")" = example.invalid ]
+done
+# Execute the actual migration body without enabling a host init service.
+eval "$(sed '/^\/etc\/init.d\/zbt-5g-adaptive enable$/d; /^exit 0$/d' "$MEGA_TEST_REPO/firmware/files/etc/uci-defaults/99-zbt-5g-adaptive-v1")"
+[ "$(uci get qmodem.4_1.zbt_5g_policy)" = auto_adaptive ]
+[ "$(uci get qmodem.2_1.zbt_5g_policy)" = nsa ]
+uci set qmodem.4_1.zbt_5g_policy=sa
+uci set qmodem.2_1.zbt_5g_policy=auto
+uci commit qmodem
+eval "$(sed '/^\/etc\/init.d\/zbt-5g-adaptive enable$/d; /^exit 0$/d' "$MEGA_TEST_REPO/firmware/files/etc/uci-defaults/99-zbt-5g-adaptive-v1")"
+[ "$(uci get qmodem.4_1.zbt_5g_policy)" = sa ]
+[ "$(uci get qmodem.2_1.zbt_5g_policy)" = auto ]
+echo 'PASS: actual ARM64 UCI repairs scalar failover into five ordered list entries; dynamic devices, APNs and explicit radio policies preserved'

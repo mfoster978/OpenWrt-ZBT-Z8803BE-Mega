@@ -27,3 +27,11 @@ zbt_speed_unlock() {
 	rmdir "$ZBT_SPEED_STATE/lock" 2>/dev/null || true
 	ZBT_SPEED_TOKEN=''
 }
+zbt_speed_renew() {
+	local expiry owner stamp
+	read -r expiry owner < "$ZBT_SPEED_STATE/lock/lease" 2>/dev/null || return 1
+	[ -n "$ZBT_SPEED_TOKEN" ] && [ "$owner" = "$ZBT_SPEED_TOKEN" ] || return 1
+	stamp=$(cut -d. -f1 /proc/uptime)
+	[ "$stamp" -le "$expiry" ] || return 1
+	printf '%s %s\n' "$((stamp + 120))" "$owner" > "$ZBT_SPEED_STATE/lock/lease"
+}

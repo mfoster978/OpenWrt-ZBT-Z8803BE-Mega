@@ -1,0 +1,61 @@
+#!/bin/sh
+# Expire only NATed LAN flows pinned to a lower-priority mwan3 mark. Never
+# flush the global conntrack table (which includes router VPN/Speedify flows).
+. /lib/functions.sh
+. /lib/functions/network.sh
+. /lib/mwan3/mwan3.sh
+. /usr/lib/zbt/mwan-runtime.sh
+case "$1" in wan_sfp|wan|usb_tether|4_1|2_1) ;; *) exit 0 ;; esac
+[ ! -f /tmp/zbt-5g/4_1/maintenance ] && [ ! -f /tmp/zbt-5g/2_1/maintenance ] || exit 0
+[ "$(uci -q get mwan3.default_rule.use_policy)" = failover ] || exit 0
+[ -z "$(uci -q changes mwan3)" ] || exit 0
+[ "$(zbt_mwan_winner)" = "$1" ] || exit 0
+command -v conntrack >/dev/null || exit 0
+config_load mwan3
+# Do not disrupt deliberate custom policy routing: marks identify WANs, not
+# which rule selected them. With custom policies we cannot safely distinguish.
+custom=0
+check_rule() {
+	local policy enabled
+	config_get_bool enabled "$1" enabled 1
+	config_get policy "$1" use_policy
+	[ "$enabled" = 0 ] || [ "$policy" = failover ] || custom=1
+}
+config_foreach check_rule rule
+[ "$custom" = 0 ] || exit 0
+config_get MMX_MASK globals mmx_mask 0x3F00
+case "$MMX_MASK" in 0x3F00|0x3f00) MMX_MASK=0x3f00 ;; *) exit 0 ;; esac
+mwan3_get_iface_id winner_id "$1"
+case "$winner_id" in ''|*[!0-9]*) exit 0 ;; esac
+winner_mark=$(mwan3_id2mask winner_id MMX_MASK)
+# Verify the installed policy actually selects this winner, not merely that
+# its ping has succeeded. Reject a weighted/multi-member policy.
+marks=$($IPT4 -S mwan3_policy_failover 2>/dev/null | sed -n 's/.*--set-xmark \([^ ]*\).*/\1/p')
+[ "$marks" = "$winner_mark/$MMX_MASK" ] || exit 0
+network_get_device lan_device lan || exit 0
+addresses=$(ip -o -4 addr show dev "$lan_device" scope global 2>/dev/null | awk '{print $4}')
+[ -n "$addresses" ] || exit 0
+lower=0
+for interface in wan_sfp wan usb_tether 4_1 2_1; do
+	if [ "$interface" = "$1" ]; then lower=1; continue; fi
+	[ "$lower" = 1 ] || continue
+	mwan3_get_iface_id id "$interface"
+	case "$id" in ''|*[!0-9]*) continue ;; esac
+	mark=$(mwan3_id2mask id MMX_MASK)
+	for address in $addresses; do
+		# Full mark excludes additional VPN marks. Ignore original router LAN
+		# addresses even if a router process explicitly bound to that address.
+		conntrack -L -f ipv4 --mark "$mark/0xffffffff" --orig-src "$address" --src-nat 2>/dev/null |
+		awk -v routers="$addresses" '
+			{ src=""; for (i=1;i<=NF;i++) {
+				if ($i ~ /^src=/ && src=="") src=substr($i,5)
+			} n=split(routers,a,"[ \n]+"); localip=0
+			for(i=1;i<=n;i++) { split(a[i],b,"/"); if(src==b[1]) localip=1 }
+			if(!localip && src!="") print src }
+		' | sort -u | while read -r source; do
+			# Avoid conntrack's obsolete --id filter (broken in some packaged
+			# builds). Recheck source, full mark and NAT in the deletion itself.
+			conntrack -D -f ipv4 --mark "$mark/0xffffffff" --orig-src "$source" --src-nat >/dev/null 2>&1 || true
+		done
+	done
+done

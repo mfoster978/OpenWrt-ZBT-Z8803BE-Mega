@@ -101,6 +101,7 @@ zbt_qmi_failed() {
 
 zbt_qmi_session() {
 	local qmi_ifindex cm_pid='' failed_since='' now
+	. /usr/lib/zbt/mwan-runtime.sh
 	case "$modem_config" in 4_1|2_1) ;; *) return 1 ;; esac
 	qmi_ifindex=$(cat "${ZBT_SYSFS:-/sys}/class/net/$modem_netcard/ifindex" 2>/dev/null)
 	# Bridge passthrough does not assign the router a WAN address. Do not
@@ -117,6 +118,7 @@ zbt_qmi_session() {
 	while zbt_qmi_child_alive; do
 		if [ "$bridge_enabled" != 1 ]; then
 			zbt_qmi_owned || break
+			zbt_mwan_refresh "$modem_config" "$modem_netcard" "$(ip -o -4 addr show dev "$modem_netcard" scope global 2>/dev/null | awk '/ inet / {print $4; exit}')" "$$-$cm_pid"
 			now=$(zbt_qmi_now)
 			if zbt_qmi_failed "$now"; then
 				[ -n "$failed_since" ] || failed_since=$now

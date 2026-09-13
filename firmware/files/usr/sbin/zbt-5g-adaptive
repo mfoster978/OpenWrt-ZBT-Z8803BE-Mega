@@ -1,0 +1,16 @@
+#!/bin/sh
+set -- library
+. /usr/sbin/zbt-qmodem-performance-policy
+. /usr/lib/zbt/speed-lock.sh
+. /usr/lib/zbt/mwan-runtime.sh
+. /usr/lib/zbt/5g-adaptive.sh
+# Never block first boot/network startup on modem enumeration or tests.
+# A terminated worker leaves a RAM rollback journal for its supervised retry.
+trap 'exit 0' INT TERM
+# Service respawn must recover a journal immediately, not wait five minutes.
+uptime=$(zbt_mwan_now)
+[ "$uptime" -ge 300 ] || sleep "$((300 - uptime))"
+while :; do
+	for section in 4_1 2_1; do zbt_adaptive_run "$section"; done
+	sleep 60
+done

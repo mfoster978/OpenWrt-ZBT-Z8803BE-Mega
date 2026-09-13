@@ -1,0 +1,4 @@
+#!/bin/sh
+# Runs after mwan3 has installed the new policy. Both wired LAN and Wi-Fi
+# enter the same br-lan policy; there is no separate Wi-Fi modem choice.
+[ "$ACTION" != connected ] || /usr/sbin/zbt-mwan-failback "$INTERFACE"
