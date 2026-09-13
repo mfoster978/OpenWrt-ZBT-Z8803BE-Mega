@@ -4,9 +4,10 @@ set -eu
 [ "${MEGA_ISOLATED_NETWORK_TEST:-0}" = 1 ] || exit 77
 : "${MEGA_TEST_ROOTFS:?image required}" "${MEGA_TEST_REPO:?repository required}"
 fixture=$(mktemp -d)
-trap 'result=$?; [ "$result" = 0 ] || { cat "$fixture/netifd.log" "$fixture/ubusd.log" 2>/dev/null; }; kill ${netifd_pid:-} ${ubusd_pid:-} 2>/dev/null || true; rm -rf "$fixture"' EXIT
+trap 'result=$?; [ "$result" = 0 ] || { cat "$fixture/netifd.log" "$fixture/ubusd.log" 2>/dev/null; }; kill ${cm1_pid:-} ${cm2_pid:-} ${netifd_pid:-} ${ubusd_pid:-} 2>/dev/null || true; rm -rf "$fixture"' EXIT
 export MEGA_TEST_CONFIG="$fixture/config" MEGA_TEST_SOCKET="$fixture/ubus.sock"
 export NETIFD_MAIN_DIR="$fixture/addons"
+export MODEM_RUNDIR="$fixture/qmodem"
 mkdir -p "$MEGA_TEST_CONFIG" "$fixture/addons/proto" /lib/functions /lib/config /usr/share/libubox
 cp "$MEGA_TEST_ROOTFS/lib/functions.sh" /lib/functions.sh
 cp "$MEGA_TEST_ROOTFS/lib/functions/"*.sh /lib/functions/
@@ -30,12 +31,20 @@ for interface in 4_1 4_1v6 2_1 2_1v6; do
 	uci set "network.$interface.proto=zbtqmi"
 	uci set "network.$interface.modem_config=$slot"
 	uci set "network.$interface.metric=200"
+	uci set "network.$interface.auto=1"
 done
 uci commit network
 ip link add qmitest type dummy
 ip link set qmitest up
 ip link add qmitest2 type dummy
 ip link set qmitest2 up
+printf '%s\n' '#!/bin/sh' 'while :; do sleep 60; done' > "$fixture/quectel-CM-M"
+chmod 755 "$fixture/quectel-CM-M"
+mkdir -p "$MODEM_RUNDIR/4_1_dir" "$MODEM_RUNDIR/2_1_dir"
+"$fixture/quectel-CM-M" -i qmitest & cm1_pid=$!
+"$fixture/quectel-CM-M" -i qmitest2 & cm2_pid=$!
+printf '%s\n' "$cm1_pid" > "$MODEM_RUNDIR/4_1_dir/4_1.pid"
+printf '%s\n' "$cm2_pid" > "$MODEM_RUNDIR/2_1_dir/2_1.pid"
 run_image() {
 	program="$1"; shift
 	if [ "${MEGA_NATIVE_NETIFD:-0}" = 1 ]; then
@@ -72,9 +81,6 @@ backup_index=$(cat /sys/class/net/qmitest2/ifindex)
 zbt_qmi_reconcile_publication 2_1 4 qmitest2 "$backup_index"
 zbt_qmi_reconcile_publication 2_1 6 qmitest2 "$backup_index"
 TEST_HEALTH=offline
-if zbt_qmi_reconcile_publication 4_1 4 qmitest "$qmi_ifindex"; then exit 1; fi
-ubus call network.interface.4_1 status | jq -e '.up==false' >/dev/null
-TEST_HEALTH=online
 zbt_qmi_reconcile_publication 4_1 4 qmitest "$qmi_ifindex"
 zbt_qmi_reconcile_publication 4_1 6 qmitest "$qmi_ifindex"
 ubus call network.interface.4_1 status | jq -e '.up==true and .["ipv4-address"][0].address=="192.0.0.2" and .route[0].nexthop=="192.0.0.1"'
@@ -90,7 +96,15 @@ ubus() {
 zbt_qmi_reconcile_publication 4_1 4 qmitest "$qmi_ifindex"
 zbt_qmi_reconcile_publication 4_1 6 qmitest "$qmi_ifindex"
 unset -f ubus
-echo 'PASS: repeated repair emits no notify_proto; unhealthy direct path is not published'
+echo 'PASS: repeated repair emits no notify_proto; stale external probe state does not circularly block tracker startup'
+ubus call network reload >/dev/null
+sleep 1
+ubus call network.interface.4_1 status | jq -e '.autostart==true' >/dev/null
+ip addr replace 192.0.0.2/27 dev qmitest
+ip route replace default via 192.0.0.1 dev qmitest metric 200
+zbt_qmi_reconcile_publication 4_1 4 qmitest "$qmi_ifindex"
+ubus call network.interface.4_1 status | jq -e '.up==true and .autostart==true and .["ipv4-address"][0].address=="192.0.0.2"' >/dev/null
+echo 'PASS: unrelated network reload retains autostart and supervised Modem 1 republishes without touching Modem 2'
 ubus call network.interface.4_1 down
 sleep 1
 ip addr replace 192.0.0.2/27 dev qmitest

@@ -12,7 +12,7 @@ zbt_modem_enabled() {
 	[ "$(uci -q get "qmodem.$1.en_bridge")" != 1 ]
 }
 zbt_health_probe() {
-	local section="$1" device index family target targets before after
+	local section="$1" device index family target targets before after family_state code
 	ZBT_HEALTH4=absent; ZBT_HEALTH6=absent; ZBT_HEALTH=offline
 	ZBT_HEALTH_DEVICE=absent; ZBT_HEALTH_INDEX=0
 	zbt_modem_enabled "$section" || { ZBT_HEALTH=disabled; return 1; }
@@ -38,6 +38,16 @@ zbt_health_probe() {
 				eval "ZBT_HEALTH$family=online"; break
 			fi
 		done
+		eval "family_state=\$ZBT_HEALTH$family"
+		# Some cellular paths carry normal HTTPS while dropping ICMP. Use a
+		# strict, device-bound 204 response as an independent fallback; a portal
+		# page or redirect is not Internet-health evidence.
+		if [ "$family_state" != online ] && command -v curl >/dev/null 2>&1; then
+			code=$(curl -"$family" -sS --noproxy '*' --interface "if!$device" \
+				--connect-timeout 3 --max-time 6 -o /dev/null -w '%{http_code}' \
+				https://www.gstatic.com/generate_204 2>/dev/null) || code=''
+			[ "$code" != 204 ] || eval "ZBT_HEALTH$family=online"
+		fi
 		after=$(ip -o -"$family" addr show dev "$device" scope global 2>/dev/null | awk '/ inet/ && !/ tentative| dadfailed/ {print $4}')
 		[ "$before" = "$after" ] || eval "ZBT_HEALTH$family=offline"
 	done

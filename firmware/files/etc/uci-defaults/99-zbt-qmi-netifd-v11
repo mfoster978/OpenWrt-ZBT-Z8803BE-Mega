@@ -1,0 +1,31 @@
+#!/bin/sh
+set -eu
+
+[ "$(uci -q get system.zbt_qmi_netifd.version 2>/dev/null || true)" = 11 ] && exit 0
+
+for section in 4_1 2_1; do
+	if ! uci -q get "network.$section" >/dev/null 2>&1; then
+		metric=200; [ "$section" != 2_1 ] || metric=210
+		uci set "network.$section=interface"
+		uci set "network.$section.proto=none"
+		uci set "network.$section.metric=$metric"
+	fi
+	# These are QModem's generated logical interfaces. Keep retained installs
+	# armed across unrelated network reloads when dialing is enabled; the CM
+	# supervisor still owns their addresses and targeted down operation.
+	uci set "network.$section.modem_config=$section"
+	if [ "$(uci -q get qmodem.main.enable_dial 2>/dev/null || true)" = 0 ] ||
+		[ "$(uci -q get "qmodem.$section.enable_dial" 2>/dev/null || true)" = 0 ]; then
+		uci set "network.$section.auto=0"
+	else
+		uci set "network.$section.auto=1"
+	fi
+done
+
+uci set system.zbt_qmi_netifd=runtime_defaults
+uci set system.zbt_qmi_netifd.version=11
+uci commit network
+uci commit system
+[ ! -x /etc/init.d/modem_watchdog ] || /etc/init.d/modem_watchdog enable
+[ ! -x /etc/init.d/qmodem_network ] || /etc/init.d/qmodem_network enable
+exit 0

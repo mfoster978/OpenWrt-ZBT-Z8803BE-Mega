@@ -10,14 +10,13 @@ zbt_mwan_reconcile_iface() {
 		*) return 0 ;;
 	esac
 	[ ! -f "/tmp/zbt-5g/$section/maintenance" ] || return 0
-	# Never override an intentionally disabled interface. A paused or absent
-	# runtime tracker may still need a targeted ifup after QMI has published a
-	# valid address and a direct, device-bound probe has proven Internet access.
+	# Never override an intentionally disabled MWAN interface. Netifd and its
+	# tracker must be started from supervised CM session evidence; requiring a
+	# successful Internet probe first is circular because mwan3 owns that test.
 	[ "$(uci -q get "mwan3.$interface.enabled")" = 1 ] || return 0
-	zbt_health_online "$section" || return 0
-	local stamp health_device index health v4 v6
-	read -r stamp health_device index health v4 v6 < "$ZBT_HEALTH_DIR/$section" || return 0
-	case "$family:$v4:$v6" in 4:online:*|6:*:online) ;; *) return 0 ;; esac
+	local health_device index
+	health_device=$(zbt_netdev "$section") || return 0
+	index=$(cat "${ZBT_SYSFS:-/sys}/class/net/$health_device/ifindex" 2>/dev/null) || return 0
 	local configured_family
 	configured_family=$(uci -q get "mwan3.$interface.family")
 	[ "${configured_family:-ipv4}" = "ipv$family" ] || return 0
@@ -32,13 +31,14 @@ zbt_mwan_reconcile_iface() {
 			zbt_qmi_reconcile_publication "$section" "$family" "$health_device" "$index"
 			publication_result=$?
 			case "$publication_result" in 0|2) network_flush_cache ;; *)
-				logger -t zbt-mwan-reconcile "iface=$interface family=$family direct_health=online action=check_publication result=not_ready_or_modem_disabled"
+				logger -t zbt-mwan-reconcile "iface=$interface family=$family evidence=supervised_cm_address_route action=check_publication result=not_ready_or_modem_disabled"
 				return 0
 			;; esac
 			;;
+		*) return 0 ;;
 	esac
 	network_is_up "$interface" || {
-		logger -t zbt-mwan-reconcile "iface=$interface direct_health=online result=netifd_not_up tracker_not_promoted"
+		logger -t zbt-mwan-reconcile "iface=$interface evidence=supervised_cm_address_route result=netifd_not_up tracker_not_started"
 		return 0
 	}
 	network_get_device device "$interface" || return 0
@@ -64,7 +64,10 @@ zbt_mwan_reconcile_iface() {
 			paused:*|disabled:*|:0|:|online:0|offline:0)
 				zbt_mwan_refresh "$section" "$device" "$address" '' "$family"
 				[ "$ZBT_MWAN_REFRESHED" = 1 ] &&
-					logger -t zbt-mwan-reconcile "iface=$interface family=$family direct_health=online tracker=${tracker:-missing} started=${started:-missing} action=tracker_ifup"
+					{
+						ZBT_MWAN_RESTART_IFACES="$ZBT_MWAN_RESTART_IFACES $interface"
+						logger -t zbt-mwan-reconcile "iface=$interface family=$family evidence=supervised_cm_address_route tracker=${tracker:-missing} started=${started:-missing} action=tracker_ifup_then_restart"
+					}
 				;;
 		esac
 		# Promotion remains fail-closed. The next watchdog cycle must observe a
@@ -85,8 +88,11 @@ zbt_mwan_reconcile_iface() {
 		}
 		zbt_mwan_rebuild=1
 	fi
-	# Recheck after route operations, before changing the runtime policy state.
-	zbt_mwan_online "$interface" && zbt_health_online "$section" || return 0
+	# Recheck both independent authorities after route operations: the current
+	# supervised CM process still owns the data path and mwan3's bound tracker is
+	# freshly online. Signal strength or an address alone never promotes a WAN.
+	zbt_mwan_online "$interface" &&
+		zbt_qmi_session_active "$section" "$family" "$device" "$index" || return 0
 	current=$(mwan3_get_iface_hotplug_state "$interface")
 	if [ "$current" != online ]; then
 		mwan3_set_iface_hotplug_state "$interface" online
@@ -123,6 +129,7 @@ zbt_mwan_reconcile_policy() {
 
 zbt_mwan_reconcile() {
 	local zbt_mwan_rebuild=0 zbt_mwan_verified=' '
+	ZBT_MWAN_RESTART_IFACES=''
 	# Caller holds the SAME lock as mwan3's hotplug and init scripts.
 	[ -z "$(uci -q changes mwan3)$(uci -q changes network)" ] || return 0
 	$IPT4 -S mwan3_hook >/dev/null 2>&1 || return 0
@@ -130,9 +137,12 @@ zbt_mwan_reconcile() {
 	network_flush_cache
 	config_foreach zbt_mwan_reconcile_iface interface
 	config_foreach zbt_mwan_reconcile_policy policy
-	[ "$zbt_mwan_rebuild" = 1 ] || return 0
-	# Reuse MWAN3's builder, including user-defined weights and policies.
-	# No hand-written default route or alternate priority authority is added.
-	mwan3_set_policies_iptables
-	logger -t zbt-mwan-reconcile 'action=rebuild_configured_policies result=dispatched'
+	if [ "$zbt_mwan_rebuild" = 1 ]; then
+		# Reuse MWAN3's builder, including user-defined weights and policies.
+		# No hand-written default route or alternate priority authority is added.
+		mwan3_set_policies_iptables
+		logger -t zbt-mwan-reconcile 'action=rebuild_configured_policies result=dispatched'
+	fi
+	[ -z "$ZBT_MWAN_RESTART_IFACES" ] || return 2
+	return 0
 }

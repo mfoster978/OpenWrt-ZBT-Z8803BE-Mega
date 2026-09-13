@@ -136,6 +136,7 @@ uci() {
 		mwan3.4_1v6.family|mwan3.2_1v6.family) echo ipv6 ;;
 		network.4_1.modem_config|network.4_1v6.modem_config) echo 4_1 ;;
 		network.2_1.modem_config|network.2_1v6.modem_config) echo 2_1 ;;
+		network.4_1.proto|network.4_1v6.proto|network.2_1.proto|network.2_1v6.proto) echo none ;;
 		*) return 1 ;;
 	esac
 }
@@ -150,8 +151,9 @@ network_is_up() { zbt_mwan_online "$1"; }
 network_get_ipaddr() { case "$2" in 4_1*) printf -v "$1" 192.0.1.1 ;; *) printf -v "$1" 192.0.2.1 ;; esac; }
 network_get_ipaddr6() { case "$2" in 4_1*) printf -v "$1" 2001:db8:1::1 ;; *) printf -v "$1" 2001:db8:2::1 ;; esac; }
 zbt_mwan_online() { case "$1" in 2_1*) return 0 ;; *) [ "$primary_health" = online ] ;; esac; }
-zbt_health_online() { zbt_mwan_online "$1"; }
 zbt_netdev() { case "$1" in 4_1) echo wan1 ;; *) echo wan2 ;; esac; }
+zbt_qmi_reconcile_publication() { return 2; }
+zbt_qmi_session_active() { return 0; }
 mwan3_set_iface_hotplug_state() { case "$1" in 4_1*) primary="$2" ;; *) secondary="$2" ;; esac; }
 logger() { echo "LOG: $*"; }
 zbt_mwan_reconcile || { echo 'FAIL: reconciliation failed' >&2; exit 1; }

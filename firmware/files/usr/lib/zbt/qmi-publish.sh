@@ -36,6 +36,38 @@ zbt_qmi_publish() {
 	return 0
 }
 
+# Prove that the address belongs to the currently supervised CM process before
+# repairing netifd. Internet reachability belongs to mwan3 and must not be a
+# prerequisite for starting mwan3's tracker.
+zbt_qmi_session_active() {
+	local modem_config="$1" family="$2" modem_netcard="$3" qmi_ifindex="$4"
+	local pid arg previous='' seen_cm=0 seen_device=0 rundir
+	case "$modem_config:$family" in 4_1:4|4_1:6|2_1:4|2_1:6) ;; *) return 1 ;; esac
+	[ "$(uci -q get qmodem.main.enable_dial)" = 1 ] || return 1
+	[ "$(uci -q get "qmodem.$modem_config.enable_dial")" = 1 ] || return 1
+	[ "$(uci -q get "qmodem.$modem_config.state")" != disabled ] || return 1
+	[ "$(uci -q get "qmodem.$modem_config.en_bridge")" != 1 ] || return 1
+	[ "$(zbt_netdev "$modem_config")" = "$modem_netcard" ] || return 1
+	[ "$(cat "${ZBT_SYSFS:-/sys}/class/net/$modem_netcard/ifindex" 2>/dev/null)" = "$qmi_ifindex" ] || return 1
+	[ ! -e "${ZBT_SYSFS:-/sys}/class/net/$modem_netcard/master" ] || return 1
+	rundir=${MODEM_RUNDIR:-/var/run/qmodem}
+	read -r pid 2>/dev/null < "$rundir/${modem_config}_dir/$modem_config.pid" || return 1
+	case "$pid" in ''|*[!0-9]*|0|1) return 1 ;; esac
+	kill -0 "$pid" 2>/dev/null || return 1
+	[ -r "/proc/$pid/cmdline" ] || return 1
+	while IFS= read -r arg; do
+		case "$arg" in quectel-CM|*/quectel-CM|quectel-CM-M|*/quectel-CM-M) seen_cm=1 ;; esac
+		[ "$previous" != -i ] || [ "$arg" != "$modem_netcard" ] || seen_device=1
+		previous=$arg
+	done <<EOF
+$(tr '\000' '\n' < "/proc/$pid/cmdline")
+EOF
+	[ "$seen_cm" = 1 ] && [ "$seen_device" = 1 ] || return 1
+	ip -o -"$family" addr show dev "$modem_netcard" scope global 2>/dev/null |
+		awk '/ inet/ && !/ tentative| dadfailed/ {found=1} END {exit !found}' || return 1
+	[ -n "$(ip -"$family" route show table main default dev "$modem_netcard" 2>/dev/null)" ]
+}
+
 # Re-publish an already working CM data path after a missed netifd update.
 # Never start a QModem-disabled interface or touch modem/radio settings.
 zbt_qmi_reconcile_publication() (
@@ -47,11 +79,9 @@ zbt_qmi_reconcile_publication() (
 	[ "$(uci -q get "network.$interface.modem_config")" = "$modem_config" ] || return 1
 	status=$(ubus -t 3 call "network.interface.$interface" status) || return 1
 	printf '%s' "$status" | jq -e '.available == true' >/dev/null || return 1
+	zbt_qmi_session_active "$modem_config" "$family" "$modem_netcard" "$qmi_ifindex" || return 1
 	zbt_qmi_owned() {
-		zbt_health_online "$modem_config" &&
-		[ "$(zbt_netdev "$modem_config")" = "$modem_netcard" ] &&
-		[ "$(cat "${ZBT_SYSFS:-/sys}/class/net/$modem_netcard/ifindex" 2>/dev/null)" = "$qmi_ifindex" ] &&
-		[ ! -e "${ZBT_SYSFS:-/sys}/class/net/$modem_netcard/master" ]
+		zbt_qmi_session_active "$modem_config" "$family" "$modem_netcard" "$qmi_ifindex"
 	}
 	zbt_qmi_owned || return 1
 	# QModem's enabled data session, not netifd's stale autostart bit, is the
@@ -66,7 +96,7 @@ zbt_qmi_reconcile_publication() (
 		ubus -t 5 call network.interface up "{\"interface\":\"$interface\"}" >/dev/null 2>&1 || return 1
 		status=$(ubus -t 3 call "network.interface.$interface" status) || return 1
 		printf '%s' "$status" | jq -e '.autostart == true and (.up == true or .pending == true)' >/dev/null || return 1
-		logger -t zbt-mwan-reconcile "iface=$interface family=$family device=$modem_netcard action=rearm_generated_interface result=verified"
+		logger -t zbt-mwan-reconcile "iface=$interface family=$family device=$modem_netcard evidence=supervised_cm_address_route action=rearm_generated_interface result=verified"
 	fi
 	# Older settings-preserving installs used proto=none with CM owning the
 	# address. Re-arming that exact interface is sufficient for MWAN; it has no

@@ -21,10 +21,12 @@ The source audit found and addressed these concrete failure paths:
   `pending=false`, `autostart=false`, a working CM address/default route and
   an enabled QModem session. The transcript's successful repair began with a
   targeted `ifup 4_1`. Reconciliation now re-arms that generated logical
-  interface when and only when fresh device-bound Internet health and the
-  QModem global/per-slot enable settings agree. An explicitly disabled modem,
-  disabled MWAN tracking, bridge mode, foreign device, pending edit or failed
-  direct health remains untouched. Legacy `proto=none` uses its verified
+  interface when and only when the QModem global/per-slot enable settings,
+  live supervised CM PID, exact `-i` device, current ifindex, global address
+  and device default route agree. Internet reachability is deliberately not a
+  prerequisite for starting the MWAN tracker that owns that determination. An
+  explicitly disabled modem, disabled MWAN tracking, bridge mode, foreign
+  device, stale CM process or pending edit remains untouched. Legacy `proto=none` uses its verified
   kernel address without writing it to UCI; `zbtqmi` additionally publishes
   and verifies external address/route readback.
 * The source of the stranded state was also present in the runtime: OpenWrt's
@@ -33,15 +35,22 @@ The source audit found and addressed these concrete failure paths:
   Their UCI/reload operations are now serialized, configuration is loaded once,
   and direct ubus operations bring up only the selected slot. QMI session
   cleanup/start also uses serialized targeted ubus down/up, without a global
-  reload. Generated QMI logical interfaces use `auto=0`, so an unrelated
-  reload cannot resurrect a stopped data session; QModem explicitly arms its
-  own interface when its supervised session starts.
+  reload. Generated QMI logical interfaces for enabled supervised sessions now
+  use `auto=1`; the prior `auto=0` setting recreated the reported
+  `autostart=false` state after an unrelated reload. QModem also issues an
+  idempotent targeted ubus up on every live-session publication. Explicitly
+  disabled QModem sessions are migrated to `auto=0` and remain down.
 * MWAN3's generic resolver prefers an existing `4_1_4` dynamic child even
   when it is down and the base interface is up. Mega's explicitly owned
   `zbtqmi` interfaces now resolve to the exact parent where CM publishes.
   Ordinary non-Mega/dynamic interfaces retain upstream behavior.
 * `mwan3 ifup` could return success without dispatching hotplug when netifd
   had no up/device result. The function and CLI now propagate failure.
+* The captured paused tracker did not recover from a targeted MWAN ifup alone;
+  the live router recovered after `ifup 4_1` followed by a normal MWAN service
+  restart. Reconciliation performs that same restart after re-arming a proven
+  live session, with a per-interface 60-second cooldown and after releasing
+  MWAN's procd lock. It reads existing policies and does not edit them.
 * CM passes an address with prefix and a session generation; the health
   worker passes a bare address without generation. Their different retry
   fingerprints defeated the shared cooldown. Both now use device + bare IP;
@@ -52,7 +61,9 @@ The source audit found and addressed these concrete failure paths:
   prevent cached packages from silently omitting these changes.
 
 UCI policies, weights, priorities and intentionally disabled interfaces are
-preserved. No global network restart or radio reset is part of reconciliation.
+preserved. No global network restart or radio reset is part of reconciliation;
+a bounded normal MWAN service restart is used only for an enabled supervised
+session whose tracker remains paused after targeted recovery.
 `zbt-mwan-diagnostics` includes publication and configuration state plus the
 reconciliation log. A dispatcher success is not proof of client connectivity.
 
@@ -113,12 +124,15 @@ automated suite; the release needs field verification on the affected router.
 guard with controlled netifd/procd inputs, including both slots and families.
 `adaptive.test.cjs` covers candidate withdrawal, sampling-before-resume,
 backup loss, IPv6 requirements, cooldowns, rollback and command binding.
-`modem-health.test.cjs` exercises failed publication readback and idempotence.
+`modem-health.test.cjs` exercises publication readback, idempotence and strict
+device-bound HTTPS 204 fallback when a cellular path drops ICMP.
 `netifd-publish-image.sh` runs the pinned native netifd/ubus/UCI builds with
 the image's protocol libraries: backup first, primary pending with live CM
 addresses, IPv4/IPv6 publication recovery, no repeated notifications,
-unhealthy-path refusal, explicit-QModem-disable preservation, and the reported
-legacy `proto=none` plus `autostart=false` recovery while backup stays online.
+unrelated network reload survival, explicit-QModem-disable preservation, and
+the reported legacy `proto=none` plus `autostart=false` recovery while backup
+stays online. `mwan-apply.test.cjs` verifies lock-safe, rate-limited restart of
+a tracker that remains paused after targeted recovery.
 The separate isolated `lan-policy-kernel.sh` test sends real IPv4/IPv6 packets
 from bridged veth clients through the pinned policy builder and reconciler;
 veth clients model Ethernet/Wi-Fi forwarding, not physical radio hardware.

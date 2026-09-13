@@ -20,9 +20,10 @@ cleanup when the installed policy disagreed, without repairing that disagreement
 The health worker now invokes `zbt-mwan-apply`, which takes MWAN3's existing
 procd lock non-blockingly and uses `mwan-reconcile.sh` to:
 
-- require enabled dialing/tracking, a live fresh tracker, fresh direct health
-  for the same address family, matching physical USB/device ownership, a
-  published netifd address and an up interface;
+- require enabled dialing/tracking and prove a live supervised CM process owns
+  the exact physical USB device, global address and default route before
+  re-arming netifd; MWAN reachability is not circularly required before its
+  tracker can start;
 - restore a missing per-interface forwarding route only from that interface's
   existing main-table route, using MWAN3's own route/rule functions;
 - resynchronize an incorrectly offline runtime policy state for a verified
@@ -31,11 +32,14 @@ procd lock non-blockingly and uses `mwan-reconcile.sh` to:
 - invoke the existing MWAN3 policy builder with the existing configuration.
 
 No UCI policies, metrics, weights, user rules, NAT zones or Wi-Fi settings are
-rewritten. No modem is redialed/reset by this path. Disabled/paused/stale links,
-adaptive maintenance and pending network/MWAN edits are respected. The helper
-does not restart MWAN3, netifd or the network. Subsequent healthy passes are
-read-only. Logs use `zbt-mwan-reconcile`; `result=dispatched` means a rebuild was
-requested, not that end-user connectivity has been independently verified.
+rewritten. No modem is redialed/reset by this path. Disabled sessions, adaptive
+maintenance and pending network/MWAN edits are respected. If an enabled,
+supervised session's tracker remains paused after targeted ifup, the helper
+releases MWAN's procd lock and performs the normal MWAN service restart that
+recovered the captured router, limited to once per interface per minute. It
+does not restart netifd or the network. Subsequent healthy passes are read-only.
+Logs use `zbt-mwan-reconcile`; `result=dispatched` means a rebuild was requested,
+not that end-user connectivity has been independently verified.
 
 The reconciliation runs with the existing health loop (normally 30 seconds
 plus probe time), including when automatic destructive recovery is disabled.
@@ -59,8 +63,7 @@ reconnection. It also tests a stale installed policy with correct runtime
 hotplug state, and restoration of Modem 1 priority once verified healthy.
 
 This does not simulate every netifd/procd startup event, certify first-boot
-hardware behavior, or demonstrate survival of existing TCP sessions across a
-public-IP change. Persistent conntrack session cleanup is a separate pending
-change. Consult the selected release's build identity and notes for its published
-image and validation results. Physical-router acceptance remains unverified;
-Modem 1's data-session failure and the first-boot problem remain unresolved.
+hardware behavior, or demonstrate survival of every existing TCP session across
+a public-IP change. Consult the selected release's build identity and notes for
+its published image and validation results. Physical-router acceptance remains
+unverified until the affected router is flashed and retested.

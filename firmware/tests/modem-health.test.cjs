@@ -32,6 +32,10 @@ ip() {
  esac
 }
 ping() { echo "ping $*" >> "$DB/calls"; case "$*" in *"$GOOD_FAMILY -I $GOOD_DEVICE"*) [ -n "$GOOD_DEVICE" ] ;; *) return 1 ;; esac; }
+curl() {
+ echo "curl $*" >> "$DB/calls"
+ case "$*" in *"--interface if!$GOOD_HTTP_DEVICE"*) [ -n "$GOOD_HTTP_DEVICE" ] && printf 204 ;; *) return 1 ;; esac
+}
 service() { echo "service $*" >> "$DB/calls"; }
 logger() { echo "log $*" >> "$DB/calls"; }
 ubus() { echo '{}'; }
@@ -57,6 +61,13 @@ test('direct probes cannot succeed through the working peer; either family can p
   const v6=fixture('zbt_health_probe 4_1; zbt_health_save 4_1; zbt_health_online 4_1; echo "$ZBT_HEALTH:$ZBT_HEALTH4:$ZBT_HEALTH6"',{ADDR4:'0',ADDR6:'1',GOOD_FAMILY:'-6',GOOD_DEVICE:'wwan8'});
   assert.equal(v6.out,'online:absent:online\n');
   assert.doesNotMatch(v6.calls,/-4 -I/);
+});
+test('strict device-bound HTTPS 204 proves Internet when the carrier drops ICMP',()=>{
+  const f=fixture('zbt_health_probe 4_1; echo "$ZBT_HEALTH:$ZBT_HEALTH4:$ZBT_HEALTH6"',{GOOD_HTTP_DEVICE:'wwan8'});
+  assert.equal(f.out,'online:online:absent\n');
+  assert.match(f.calls,/--interface if!wwan8[\s\S]*generate_204/);
+  const portal=fixture('zbt_health_probe 4_1 || :; echo "$ZBT_HEALTH:$ZBT_HEALTH4"',{GOOD_HTTP_DEVICE:''});
+  assert.equal(portal.out,'offline:offline\n');
 });
 test('LED health rejects stale, re-enumerated, disabled and recovering slots',()=>{
   const f=fixture(`zbt_health_probe 4_1; zbt_health_save 4_1; zbt_health_online 4_1 && echo fresh

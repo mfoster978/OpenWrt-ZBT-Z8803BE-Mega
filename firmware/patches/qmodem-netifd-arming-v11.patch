@@ -1,0 +1,35 @@
+--- a/application/qmodem/files/usr/share/qmodem/modem_dial.sh
++++ b/application/qmodem/files/usr/share/qmodem/modem_dial.sh
+@@ -790 +790 @@
+-            if [ "$qmi_current" != "zbtqmi:$modem_config:$target_netcard:$target_netcard:0" ]; then
++            if [ "$qmi_current" != "zbtqmi:$modem_config:$target_netcard:$target_netcard:1" ]; then
+@@ -795,3 +795,3 @@
+-                # A later global reload must not resurrect a logical interface
+-                # whose supervised data session has stopped.
+-                uci -q set network.$logical.auto=0
++                # Keep a live supervised data session armed across unrelated
++                # network reloads. Without this, netifd returns to disabled.
++                uci -q set network.$logical.auto=1
+@@ -837 +837 @@
+-            # Reload affects every auto=0 QMI interface, so re-arm all enabled
++            # Re-arm every enabled QMI interface after the serialized reload,
+@@ -860,6 +860,19 @@
+             m_debug "network reload"
+         fi
+     fi
++    if [ "$qmi_netifd_lock" -eq 1 ]; then
++        # Arm this session even when its generated UCI signature was already
++        # correct and no reload branch ran. Repeating a targeted ubus up is
++        # idempotent and never reloads or changes the peer modem.
++        for logical in "$interface_name" "$interface6_name"; do
++            [ "$(uci -q get network.$logical.proto)" = zbtqmi ] || continue
++            [ "$(uci -q get network.$logical.modem_config)" = "$modem_config" ] || continue
++            [ "$(uci -q get qmodem.main.enable_dial)" = 1 ] || continue
++            [ "$(uci -q get qmodem.$modem_config.enable_dial)" = 1 ] || continue
++            [ "$(uci -q get qmodem.$modem_config.state)" != disabled ] || continue
++            ubus -t 5 call network.interface up "{\"interface\":\"$logical\"}" >/dev/null 2>&1
++        done
++    fi
+     if [ "$firewall_reload_flag" -eq 1 ];then
+         uci commit firewall
+         /etc/init.d/firewall restart

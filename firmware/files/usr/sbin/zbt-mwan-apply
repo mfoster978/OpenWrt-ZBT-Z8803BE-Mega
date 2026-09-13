@@ -13,4 +13,32 @@ flock -n 1000 || exit 0
 /etc/init.d/mwan3 running >/dev/null 2>&1 || exit 0
 [ -z "$(uci -q changes mwan3)$(uci -q changes network)" ] || exit 0
 mwan3_init
-zbt_mwan_reconcile
+result=0
+zbt_mwan_reconcile || result=$?
+[ "$result" = 2 ] || exit "$result"
+
+# A targeted mwan3 ifup normally wakes its tracker. The field failure leaves a
+# live tracker permanently paused, and the captured router was recovered only
+# after mwan3 was restarted. Do that exact resynchronization once per affected
+# interface/cooldown, after dropping mwan3's inherited procd lock. Existing UCI
+# policies and priorities are read back by the normal service; none are edited.
+state_dir=/tmp/zbt-mwan-restart
+mkdir -p "$state_dir"
+now=$(zbt_mwan_now)
+for interface in $ZBT_MWAN_RESTART_IFACES; do
+	last=0
+	read -r last 2>/dev/null < "$state_dir/$interface" || true
+	case "$last" in ''|*[!0-9]*) last=0 ;; esac
+	[ "$now" -ge "$last" ] && [ $((now - last)) -ge 60 ] || continue
+	printf '%s\n' "$now" > "$state_dir/$interface"
+	logger -t zbt-mwan-reconcile "iface=$interface action=restart_mwan3 reason=enabled_supervised_session_tracker_paused result=dispatching"
+	flock -u 1000
+	exec 1000>&-
+	if /etc/init.d/mwan3 restart >/dev/null 2>&1; then
+		logger -t zbt-mwan-reconcile "iface=$interface action=restart_mwan3 result=complete"
+		exit 0
+	fi
+	logger -t zbt-mwan-reconcile "iface=$interface action=restart_mwan3 result=failed"
+	exit 1
+done
+exit 0

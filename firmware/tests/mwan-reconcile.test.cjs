@@ -16,7 +16,8 @@ function run(before='', env={}) {
   write('sys/class/net/wwan3/ifindex',23); write('sys/class/gpio/5g2/value',1);
   for (const [key,value] of Object.entries({
     'qmodem.main.enable_dial':1, 'qmodem.2_1.enable_dial':1,
-    'mwan3.2_1.enabled':1, 'mwan3.2_1.family':'ipv4', 'network.2_1.modem_config':'2_1'
+    'mwan3.2_1.enabled':1, 'mwan3.2_1.family':'ipv4', 'network.2_1.modem_config':'2_1',
+    'network.2_1.proto':'zbtqmi'
   })) write('uci/'+key,value);
   for (const [key,value] of Object.entries({STATUS:'online',STARTED:1,TIME:1000,PID:process.pid})) write('track/2_1/'+key,value);
   write('health/2_1','1000 wwan3 23 online online absent');
@@ -35,9 +36,11 @@ network_get_device() { eval "$1=wwan3"; }
 network_get_ipaddr() { [ "$NO_NETIFD_ADDRESS" = 1 ] || eval "$1=10.0.0.2"; }
 zbt_qmi_reconcile_publication() {
   [ "$PUBLICATION_FAIL" != 1 ] || return 1
+  [ "$(cat "$DB/uci/qmodem.2_1.enable_dial" 2>/dev/null)" = 1 ] || return 1
   if [ "$NO_LINK" = 1 ]; then echo "publish $*" >> "$DB/calls"; NO_LINK=0; fi
   [ "$LEGACY" != 1 ] || return 2
 }
+zbt_qmi_session_active() { [ "$SESSION_LOST" != 1 ]; }
 config_foreach() { if [ "$2" = interface ]; then "$1" 4_1; "$1" 2_1; else "$1" failover; fi; }
 config_list_foreach() { "$3" backup; }
 config_get() {
@@ -90,12 +93,12 @@ test('online hotplug state with unreachable installed policy still rebuilds',()=
 test('healthy existing policy is left untouched',()=>{
   assert.equal(run('echo online > "$DB/state/iface_state/2_1"; echo online > "$DB/policy"').calls,'');
 });
-test('paused or stopped tracker with verified direct Internet receives one targeted ifup',()=>{
+test('paused or stopped tracker with a supervised CM address receives targeted ifup without a circular health gate',()=>{
   for (const change of ['echo paused > "$DB/track/2_1/STATUS"',
     'echo disabled > "$DB/track/2_1/STATUS"', 'echo 0 > "$DB/track/2_1/STARTED"']) {
     const f=run(change);
     assert.equal(f.calls,'ifup 2_1\n',change);
-    assert.match(f.log,/direct_health=online[\s\S]*action=tracker_ifup/);
+    assert.match(f.log,/evidence=supervised_cm_address_route[\s\S]*action=tracker_ifup_then_restart/);
   }
 });
 test('targeted recovery requires a later fresh-online pass before policy promotion',()=>{
@@ -117,13 +120,16 @@ test('reported proto=none/autostart=false state uses verified kernel address aft
 test('active offline, stale, dead or intentionally disabled trackers are never promoted',()=>{
   for (const change of ['echo 800 > "$DB/track/2_1/TIME"',
     'echo offline > "$DB/track/2_1/STATUS"', 'echo 2147483647 > "$DB/track/2_1/PID"',
-    'echo 0 > "$DB/uci/mwan3.2_1.enabled"', 'echo 0 > "$DB/uci/qmodem.2_1.enable_dial"',
-    'echo 24 > "$DB/sys/class/net/wwan3/ifindex"',
-    'echo "800 wwan3 23 online online absent" > "$DB/health/2_1"',
-    'echo "1000 wwan3 23 online offline online" > "$DB/health/2_1"']) assert.equal(run(change).calls,'',change);
+    'echo 0 > "$DB/uci/mwan3.2_1.enabled"', 'echo 0 > "$DB/uci/qmodem.2_1.enable_dial"'])
+    assert.equal(run(change).calls,'',change);
+  assert.equal(run('',{SESSION_LOST:'1'}).calls,'');
 });
-test('pending user edits, missing netifd link/address or uninitialized MWAN are left alone',()=>{
-  for(const env of [{PENDING:'mwan3.edit=1'},{NO_LINK:'1'},{WRONG_ADDRESS:'1'},{NO_HOOK:'1'}]) assert.equal(run('',env).calls,'',JSON.stringify(env));
+test('pending user edits, invalid address or uninitialized MWAN are left alone',()=>{
+  for(const env of [{PENDING:'mwan3.edit=1'},{WRONG_ADDRESS:'1'},{NO_HOOK:'1'}]) assert.equal(run('',env).calls,'',JSON.stringify(env));
+});
+test('a stale independent health sample cannot prevent supervised-session tracker recovery',()=>{
+  const f=run('echo disabled > "$DB/track/2_1/STATUS"; echo 0 > "$DB/track/2_1/STARTED"; echo "1 wrong 99 offline offline absent" > "$DB/health/2_1"');
+  assert.equal(f.calls,'ifup 2_1\n');
 });
 test('missing forwarding route is repaired only from an existing main-table route',()=>{
   assert.equal(run('',{NO_TABLE:'1'}).calls,'route 2_1 wwan3\nrules 2_1 wwan3\nstate 2_1 online\nbuild\n');
