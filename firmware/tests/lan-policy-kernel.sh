@@ -4,6 +4,10 @@
 set -eu
 [ "${MEGA_ISOLATED_NETWORK_TEST:-0}" = 1 ] || exit 77
 : "${MEGA_TEST_REPO:?repository required}"
+# A network namespace does not automatically remount sysfs. The production
+# reconciler verifies physical ifindex ownership through /sys/class/net, so
+# expose this namespace's devices instead of the host/runner device list.
+mount -t sysfs -o ro,nosuid,nodev,noexec sysfs /sys
 fixture=$(mktemp -d)
 cleanup() {
 	for ns in mega-wired mega-wifi mega-wan1 mega-wan2; do ip netns del "$ns" 2>/dev/null || true; done
