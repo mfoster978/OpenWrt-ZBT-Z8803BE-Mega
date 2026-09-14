@@ -32,7 +32,7 @@ zbt_recovery_worker_pid() {
 	printf '%s\n' "$pid"
 }
 zbt_recovery_action() (
-	local section="$1" action="$2" config_section="$1" path pid tries=0 powered_off=0 owner rest registered=''
+	local section="$1" action="$2" config_section="$1" path pid tries=0 powered_off=0 usb_disabled=0 usb_auth='' owner rest registered=''
 	zbt_recovery_allowed "$section" || exit 1
 	exec 6>"$ZBT_RECOVERY_DIR/action.lock"
 	flock -n 6 || exit 75
@@ -44,6 +44,7 @@ zbt_recovery_action() (
 	read -r owner rest < /proc/self/stat
 	printf '%s\n' "$owner" > "$path"
 	finish() {
+		[ "$usb_disabled" != 1 ] || printf '1\n' > "$usb_auth"
 		[ "$powered_off" != 1 ] || printf '1\n' > "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value"
 		[ "$(cat "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value" 2>/dev/null)" != 1 ] || rm -f "$ZBT_RECOVERY_DIR/$section.power-off"
 		rm -f "$path"
@@ -52,6 +53,10 @@ zbt_recovery_action() (
 	trap 'finish' EXIT
 	trap 'exit 1' INT TERM
 	zbt_slot "$section" || exit 1
+	usb_auth="${ZBT_SYSFS:-/sys}/bus/usb/devices/$ZBT_USB/authorized"
+	if [ "$action" = usb_reset ]; then
+		[ -w "$usb_auth" ] || exit 1
+	fi
 	if [ "$action" = power_cycle ]; then
 		[ -w "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value" ] || exit 1
 	fi
@@ -70,6 +75,31 @@ zbt_recovery_action() (
 		logger -t modem-watchdog "slot=$section action=$action stage=post-teardown result=cancelled-admin-disabled"
 		exit 1
 	}
+	if [ "$action" = usb_reset ]; then
+		logger -t modem-watchdog "slot=$section action=$action stage=usb-deauthorize result=starting"
+		usb_disabled=1
+		if ! printf '0\n' > "$usb_auth"; then
+			logger -t modem-watchdog "slot=$section action=$action stage=usb-deauthorize result=write-failed"
+			exit 1
+		fi
+		sleep 5
+		if ! printf '1\n' > "$usb_auth"; then
+			logger -t modem-watchdog "slot=$section action=$action stage=usb-reauthorize result=write-failed"
+			exit 1
+		fi
+		usb_disabled=0
+		tries=0
+		while [ "$tries" -lt 20 ]; do
+			zbt_netdev "$section" >/dev/null 2>&1 && break
+			tries=$((tries + 1))
+			sleep 1
+		done
+		if ! zbt_netdev "$section" >/dev/null 2>&1; then
+			logger -t modem-watchdog "slot=$section action=$action stage=usb-reauthorize result=netdev-timeout seconds=20"
+			exit 1
+		fi
+		logger -t modem-watchdog "slot=$section action=$action stage=usb-reauthorize result=complete wait_seconds=$tries"
+	fi
 	if [ "$action" = power_cycle ]; then
 		powered_off=1
 		printf '%s\n' "$owner" > "$ZBT_RECOVERY_DIR/$section.power-off"
@@ -82,8 +112,6 @@ zbt_recovery_action() (
 			logger -t modem-watchdog "slot=$section action=$action stage=gpio-low result=verify-failed"
 			exit 1
 		fi
-		# RM551E hardware testing showed that eight seconds can leave the broken
-		# QMI receive state intact. Ten seconds reliably forces USB/baseband reset.
 		sleep 10
 		if ! printf '1\n' > "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value"; then
 			logger -t modem-watchdog "slot=$section action=$action stage=gpio-high result=write-failed"
@@ -173,9 +201,13 @@ zbt_recovery_check() {
 		[ "$now" -ge "$grace" ] && { [ "$last" = 0 ] || [ $((now - last)) -ge "$cooldown" ]; } &&
 		[ "$cycles" -lt 3 ]; then
 		action=$(zbt_recovery_get "$key.action")
-		if [ "$action" = power_cycle ] && [ "$attempts" -lt "$limit" ] && [ "$reason" != rx_errors_growing ]; then action=redial; fi
+		if [ "$action" = power_cycle ] && [ "$reason" = rx_errors_growing ] && [ "$attempts" = 0 ]; then
+			action=usb_reset
+		elif [ "$action" = power_cycle ] && [ "$attempts" -lt "$limit" ]; then
+			action=redial
+		fi
 		case "$action" in
-			power_cycle|redial|disconnect)
+			power_cycle|redial|disconnect|usb_reset)
 				if (config_section="$section"; zbt_5g_lock && zbt_5g_unlock); then
 					previous_last=$last; previous_fails=$fails
 					last=$now; attempts=$((attempts + 1)); cycles=$((cycles + 1)); fails=0

@@ -23,6 +23,7 @@ function fixture(body, options={}) {
   const write = (p, v) => { fs.mkdirSync(path.dirname(path.join(d,p)),{recursive:true}); fs.writeFileSync(path.join(d,p), v+'\n'); };
   for (const [slot, usb, dev, gpio, index] of [['4_1','4-1','wwan8','5g1',17], ['2_1','2-1','wwan3','5g2',23]]) {
     fs.mkdirSync(path.join(d,`sys/bus/usb/devices/${usb}/${usb}:1.4/net/${dev}`),{recursive:true});
+    write(`sys/bus/usb/devices/${usb}/authorized`,1);
     write(`sys/class/net/${dev}/ifindex`,index); write(`sys/class/net/${dev}/statistics/rx_errors`,0);
     write(`sys/class/gpio/${gpio}/value`,1);
     write(`uci/qmodem.${slot}.enable_dial`,1); write(`uci/qmodem.${slot}.state`,'enabled');
@@ -377,13 +378,15 @@ test('disabled modem and disabled recovery are read-only; missing GPIO never han
   const f=fixture('echo 0 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; rm "$DB/sys/class/gpio/5g1/value"; cycle; cycle; cycle; cycle');
   assert.doesNotMatch(f.calls,/service /);
 });
-test('bounded redial-first option escalates to GPIO; growing RX errors bypass soft retry',()=>{
+test('bounded redial-first option escalates to GPIO; growing RX errors use USB reset before GPIO fallback',()=>{
   const f=fixture('echo 1 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; cycle; cycle; cycle; echo 700 > "$DB/clock"; cycle; cycle; cycle');
   assert.match(f.calls,/requesting redial[\s\S]*requesting power_cycle/);
   assert.match(f.calls,/slot=4_1 action=redial result=dispatched[\s\S]*slot=4_1 action=power_cycle result=dispatched/);
   const bad=fixture('echo 2 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; cycle; cycle; echo 300 > "$DB/sys/class/net/wwan8/statistics/rx_errors"; cycle');
-  assert.match(bad.calls,/rx_errors_growing; requesting power_cycle/);
-  assert.doesNotMatch(bad.calls,/requesting redial/);
+  assert.match(bad.calls,/rx_errors_growing; requesting usb_reset/);
+  assert.match(bad.calls,/slot=4_1 action=usb_reset result=dispatched/);
+  assert.doesNotMatch(bad.calls,/requesting redial|requesting power_cycle/);
+  assert.equal(fs.readFileSync(path.join(bad.d,'sys/bus/usb/devices/4-1/authorized'),'utf8').trim(),'1');
 });
 test('three consecutive successes clear failure streak, not a single stray success',()=>{
   const f=fixture('cycle; cycle; cycle; GOOD_DEVICE=wwan8; cycle; GOOD_DEVICE=""; cycle');
