@@ -8,13 +8,21 @@ zbt_recovery_uint() {
 	case "$1" in ''|*[!0-9]*) echo "$2" ;; *)
 		[ "$1" -ge "$3" ] && [ "$1" -le "$4" ] && echo "$1" || echo "$2" ;; esac
 }
-zbt_recovery_allowed() {
-	local key=modem1
-	[ "$1" != 2_1 ] || key=modem2
-	zbt_modem_enabled "$1" &&
+# Stable administrative authorization. This deliberately ignores transient
+# GPIO, USB and netdev state so a recovery that has already torn a modem down
+# cannot cancel its own power pulse or restart halfway through.
+zbt_recovery_authorized() {
+	local section="$1" key=modem1
+	case "$section" in 4_1) ;; 2_1) key=modem2 ;; *) return 1 ;; esac
+	[ "$(uci -q get qmodem.main.enable_dial)" = 1 ] &&
+	[ "$(uci -q get "qmodem.$section.enable_dial")" = 1 ] &&
+	[ "$(uci -q get "qmodem.$section.en_bridge")" != 1 ] &&
 	[ "$(zbt_recovery_get global.enabled)" = 1 ] &&
 	[ "$(zbt_recovery_get global.actions_enabled)" = 1 ] &&
 	[ "$(zbt_recovery_get "$key.enabled")" = 1 ]
+}
+zbt_recovery_allowed() {
+	zbt_recovery_authorized "$1" && zbt_modem_enabled "$1"
 }
 zbt_recovery_worker_pid() {
 	local section="$1" pid
@@ -51,25 +59,49 @@ zbt_recovery_action() (
 	case "$pid" in ''|*[!0-9]*|0|1) pid='' ;; esac
 	/etc/init.d/qmodem_network hang "$section" >/dev/null 2>&1 || true
 	while [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; do
-		[ "$tries" -lt 30 ] || exit 1
+		[ "$tries" -lt 30 ] || {
+			logger -t modem-watchdog "slot=$section action=$action stage=teardown result=timeout seconds=30"
+			exit 1
+		}
 		sleep 1; tries=$((tries + 1))
 	done
-	zbt_recovery_allowed "$section" || exit 1
+	logger -t modem-watchdog "slot=$section action=$action stage=teardown result=complete wait_seconds=$tries"
+	zbt_recovery_authorized "$section" || {
+		logger -t modem-watchdog "slot=$section action=$action stage=post-teardown result=cancelled-admin-disabled"
+		exit 1
+	}
 	if [ "$action" = power_cycle ]; then
 		powered_off=1
 		printf '%s\n' "$owner" > "$ZBT_RECOVERY_DIR/$section.power-off"
-		printf '0\n' > "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value" || exit 1
-		[ "$(cat "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value")" = 0 ] || exit 1
+		logger -t modem-watchdog "slot=$section action=$action stage=gpio-low result=starting seconds=10"
+		if ! printf '0\n' > "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value"; then
+			logger -t modem-watchdog "slot=$section action=$action stage=gpio-low result=write-failed"
+			exit 1
+		fi
+		if [ "$(cat "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value" 2>/dev/null)" != 0 ]; then
+			logger -t modem-watchdog "slot=$section action=$action stage=gpio-low result=verify-failed"
+			exit 1
+		fi
 		# RM551E hardware testing showed that eight seconds can leave the broken
 		# QMI receive state intact. Ten seconds reliably forces USB/baseband reset.
 		sleep 10
-		printf '1\n' > "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value" || exit 1
-		[ "$(cat "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value")" = 1 ] || exit 1
+		if ! printf '1\n' > "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value"; then
+			logger -t modem-watchdog "slot=$section action=$action stage=gpio-high result=write-failed"
+			exit 1
+		fi
+		if [ "$(cat "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value" 2>/dev/null)" != 1 ]; then
+			logger -t modem-watchdog "slot=$section action=$action stage=gpio-high result=verify-failed"
+			exit 1
+		fi
+		logger -t modem-watchdog "slot=$section action=$action stage=gpio-high result=complete"
 		powered_off=0
 		rm -f "$ZBT_RECOVERY_DIR/$section.power-off"
 	fi
 	[ "$action" != disconnect ] || exit 0
-	zbt_recovery_allowed "$section" || exit 1
+	zbt_recovery_authorized "$section" || {
+		logger -t modem-watchdog "slot=$section action=$action stage=restart result=cancelled-admin-disabled"
+		exit 1
+	}
 	rm -f "$path"
 	tries=0
 	while [ "$tries" -lt 30 ]; do
