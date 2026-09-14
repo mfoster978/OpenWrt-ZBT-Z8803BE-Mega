@@ -2,6 +2,7 @@
 # Repair MLD records written by older versions of the custom LuCI page.
 # The new filename deliberately reruns this migration on the next sysupgrade.
 # Ordinary APs and manually named MLO sections are intentionally untouched.
+# Shared MLD sections are independent records even when they share an SSID.
 
 . /lib/functions.sh
 
@@ -14,6 +15,24 @@ sections="$(uci -q show wireless | sed -nE 's/^wireless\.([^.]+)=wifi-iface$/\1/
 changed=0
 processed=' '
 
+scalar_device() {
+	# get/show do not distinguish a one-item list from a scalar option. Only
+	# the old generated scalar layout may be consolidated across sections.
+	uci -q export wireless | awk -v wanted="$1" '
+		$1 == "config" { name=$3; gsub(/\047/, "", name); selected=(name == wanted) }
+		selected && $2 == "device" && $1 == "option" { device=$3; gsub(/\047/, "", device) }
+		selected && $2 == "device" && $1 == "list" { islist=1 }
+		END { if (!islist && device != "") print device; else exit 1 }
+	'
+}
+
+legacy_base() {
+	case "$1" in
+		mld_*_2g|mld_*_5g|mld_*_6g) printf '%s\n' "${1%_*}" ;;
+		*) return 1 ;;
+	esac
+}
+
 for first in $sections; do
 	case "$processed" in *" $first "*) continue ;; esac
 	case "$first" in mld_*) ;; *) continue ;; esac
@@ -24,14 +43,25 @@ for first in $sections; do
 	[ -n "$ssid" ] || continue
 
 	members="$first"
-	for candidate in $sections; do
-		[ "$candidate" != "$first" ] || continue
-		[ "$(uci -q get "wireless.${candidate}.mlo")" = "1" ] || continue
-		candidate_mode="$(uci -q get "wireless.${candidate}.mode")"
-		[ -z "$candidate_mode" ] || [ "$candidate_mode" = "ap" ] || continue
-		[ "$(uci -q get "wireless.${candidate}.ssid")" = "$ssid" ] || continue
-		members="$members $candidate"
-	done
+	base="$(legacy_base "$first")"
+	if [ -n "$base" ] && scalar_device "$first" >/dev/null &&
+	   [ "$(uci -q get "wireless.${first}.network")" = lan ]; then
+		for candidate in $sections; do
+			[ "$candidate" != "$first" ] || continue
+			case "$processed" in *" $candidate "*) continue ;; esac
+			[ "$(legacy_base "$candidate")" = "$base" ] || continue
+			scalar_device "$candidate" >/dev/null || continue
+			[ "$(uci -q get "wireless.${candidate}.mlo")" = "1" ] || continue
+			candidate_mode="$(uci -q get "wireless.${candidate}.mode")"
+			[ -z "$candidate_mode" ] || [ "$candidate_mode" = "ap" ] || continue
+			matching=1
+			for option in ssid encryption key network ieee80211w disabled mode; do
+				[ "$(uci -q get "wireless.${candidate}.${option}")" = "$(uci -q get "wireless.${first}.${option}")" ] || matching=0
+			done
+			[ "$matching" = 1 ] || continue
+			members="$members $candidate"
+		done
+	fi
 
 	devices=""
 	dropped=""
@@ -54,33 +84,34 @@ for first in $sections; do
 	done
 
 	set -- $devices
+	processed="${processed}${members} "
 	if [ "$#" -lt 2 ]; then
-		logger -t zbt-mlo "leaving invalid one-link MLD '$ssid' unchanged after excluding non-EHT radios${dropped:+: $dropped}"
-		processed="${processed}${members} "
+		logger -t zbt-mlo "leaving invalid MLD section=$first unchanged after excluding non-EHT radios${dropped:+: $dropped}"
+		continue
+	fi
+	# Already-correct shared records are untouched, including their network,
+	# security, disabled state and any same-name guest MLD beside them.
+	if [ "$members" = "$first" ] && [ -z "$dropped" ] &&
+	   [ "$(uci -q get "wireless.${first}.device")" = "$devices" ]; then
 		continue
 	fi
 
 	# One wifi-iface with list device is the representation consumed by the
-	# pinned netifd MLO implementation. Make its LAN membership explicit so
-	# the common ap-mld interface is added to br-lan and receives DHCP traffic.
+	# pinned netifd MLO implementation. Preserve original network membership;
+	# no guest record is merged into or promoted to LAN by this migration.
 	uci -q delete "wireless.${first}.device"
 	for device in "$@"; do
 		uci -q add_list "wireless.${first}.device=${device}"
 	done
-	uci -q delete "wireless.${first}.network"
-	uci -q add_list "wireless.${first}.network=lan"
-	uci -q set "wireless.${first}.mode=ap"
-	uci -q set "wireless.${first}.mlo=1"
-	uci -q set "wireless.${first}.ieee80211w=2"
-	uci -q set "wireless.${first}.disabled=0"
-	uci -q delete "wireless.${first}.mld_ap" 2>/dev/null
-	uci -q delete "wireless.${first}.mld_id" 2>/dev/null
+	if [ "$members" != "$first" ]; then
+		uci -q delete "wireless.${first}.mld_ap" 2>/dev/null
+		uci -q delete "wireless.${first}.mld_id" 2>/dev/null
+	fi
 	for member in $members; do
 		[ "$member" = "$first" ] || uci -q delete "wireless.${member}"
 	done
-	processed="${processed}${members} "
 	changed=1
-	logger -t zbt-mlo "repaired MLO SSID '$ssid' as one ${#}-radio LAN wifi-iface${dropped:+; excluded non-EHT radios: $dropped}"
+	logger -t zbt-mlo "repaired MLO section=$first as one ${#}-radio wifi-iface; original network and security preserved${dropped:+; excluded non-EHT radios: $dropped}"
 done
 
 [ "$changed" -eq 0 ] || {

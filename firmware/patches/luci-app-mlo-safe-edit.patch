@@ -1,0 +1,302 @@
+Subject: [PATCH] luci-app-mlo: preserve APs and edit MLDs by section identity
+
+Layer after luci-app-mlo-shared-iface.patch. Validate EHT and secure MLO
+settings before changing UCI; never select standalone APs by SSID.
+
+--- a/htdocs/luci-static/resources/view/mlo/main.js
++++ b/htdocs/luci-static/resources/view/mlo/main.js
+@@ -63,6 +63,31 @@
+ 	return section.device ? [ section.device ] : [];
+ }
+ 
++function isMloAp(section) {
++	return (!section.mode || section.mode === 'ap') &&
++		(section.mlo === '1' || section.mlo === 1 || section.mlo === true);
++}
++
++function ehtRadio(device) {
++	return /^EHT(20|40|80|160|320)$/.test(uci.get('wireless', device, 'htmode') || '');
++}
++
++function validateMld(rec) {
++	if (!rec.ssid || !rec.ssid.trim() || new TextEncoder().encode(rec.ssid).length > 32)
++		return _('SSID must contain 1–32 bytes.');
++	if (!rec.bands || rec.bands.size < 2)
++		return _('MLO requires at least 2 linked bands.');
++	const radios = radiosByBand();
++	if (Array.from(rec.bands).some(band => !radios[band] || !ehtRadio(radios[band])))
++		return _('Every linked band must use BE (Wi-Fi 7) mode. Configure the radios under Network → Wireless first; leave legacy 2.4 GHz outside MLO.');
++	if (rec.encryption !== 'sae' && rec.encryption !== 'owe')
++		return _('MLO requires WPA3-SAE or OWE with required protected management frames. WPA2, mixed mode, and unencrypted open networks are not supported here.');
++	const bytes = new TextEncoder().encode(rec.key || '').length;
++	if (rec.encryption === 'sae' && (bytes < 8 || bytes > 63 || /[\r\n\0]/.test(rec.key)))
++		return _('The WPA3 passphrase must contain 8–63 bytes without line breaks.');
++	return null;
++}
++
+ function loadMlds() {
+ 	/*
+ 	 * OpenWrt's MLO model: a wifi-iface opts into MLO with
+@@ -70,18 +95,26 @@
+ 	 * There is no explicit group id; netifd creates the MLD once from
+ 	 * that shared section and derives each link id from the radio index.
+ 	 *
+-	 * We key MLD records by SSID here so multiple SSIDs (e.g. Home
+-	 * and Guest) each form their own MLD.
++	 * Shared sections have independent identities, even when a guest MLD
++	 * uses the same SSID. Only old scalar per-band records with matching
++	 * security and network membership are grouped for consolidation.
+ 	 */
+-	const mlds = {};        /* ssid -> MLD record */
++	const mlds = Object.create(null);
++	const legacy = new Map();
+ 	const standalone = [];
+ 	uci.sections('wireless', 'wifi-iface').forEach(function (s) {
+ 		if (s.mode && s.mode !== 'ap') return;
+-		if (s.mlo == '1' || s.mlo === 1 || s.mlo === true) {
+-			const key = s.ssid || '(no SSID)';
++		if (isMloAp(s)) {
++			let key = s['.name'];
++			if (!Array.isArray(s.device)) {
++				const networks = Array.isArray(s.network) ? s.network.slice().sort() : [ s.network || '' ];
++				const signature = JSON.stringify([ s.ssid, s.encryption, s.key, networks, s.disabled || '0', s.ieee80211w || '' ]);
++				if (legacy.has(signature)) key = legacy.get(signature);
++				else legacy.set(signature, key);
++			}
+ 			if (!mlds[key]) {
+ 				mlds[key] = {
+-					mld_id: key, /* just for display */
++					mld_id: key,
+ 					ssid: s.ssid || '',
+ 					encryption: s.encryption || 'none',
+ 					key: s.key || '',
+@@ -164,14 +197,14 @@
+ 			_('Bands available on this device: %s.').format(
+ 				availableBands.map(b => BAND_LABEL[b]).join(', ') || _('(none)'))),
+ 		E('p', { 'class': 'hint', 'style': 'opacity:0.7;margin-bottom:0.25em' },
+-			_('This firmware negotiates EHT320 (320 MHz channels) on 6 GHz. ' +
+-			  'WiFi 7 clients (iPhone 16+, Pixel 9+, Intel BE200, MediaTek MT7925) ' +
+-			  'aggregate all MLD links. Non-MLO clients still associate via a ' +
+-			  'single preferred link and function normally.')),
++			_('Configure linked radios in BE (Wi-Fi 7) mode under Network → Wireless. ' +
++			  'Actual links and channel widths depend on radio configuration and client support. ' +
++			  'Keep legacy 2.4 GHz as a separate WPA2 access point; it can share the MLO network name and password.')),
+ 		E('p', { 'class': 'hint', 'style': 'opacity:0.7;margin-bottom:1em' },
+ 			_('MLO requires every linked band to share identical SSID, ' +
+ 			  'encryption, PSK and PMF policy. The editor below enforces ' +
+-			  'this automatically when you save.')),
++			  'this automatically when you save. Removing a linked band changes only this MLD; ' +
++			  'other access points are preserved and no standalone access point is created automatically.')),
+ 		E('table', {
+ 			'class': 'table cbi-section-table',
+ 			'style': 'width:100%;border-collapse:collapse'
+@@ -192,8 +225,8 @@
+ 	const initial = existing || {
+ 		ssid: '',
+ 		encryption: 'sae',
+-		key: '12345678',
+-		bands: new Set(availableBands)
++		key: '',
++		bands: new Set(availableBands.filter(band => ehtRadio(radios[band])))
+ 	};
+ 
+ 	const INPUT_STYLE = 'width:100%;box-sizing:border-box;padding:0.5em';
+@@ -220,14 +253,16 @@
+ 		'id': 'mlo-enc',
+ 		'class': 'cbi-input-select',
+ 		'style': INPUT_STYLE
+-	}, Object.keys(ENC_LABEL).map(function (k) {
+-		return E('option', { 'value': k, 'selected': k === initial.encryption ? 'selected' : null },
+-			ENC_LABEL[k]);
++	}, [ 'sae', 'owe' ].concat(/^(sae|owe)$/.test(initial.encryption) ? [] : [ initial.encryption ]).map(function (k) {
++		const valid = k === 'sae' || k === 'owe';
++		return E('option', { 'value': k, 'selected': k === initial.encryption ? 'selected' : null,
++			'disabled': valid ? null : 'disabled' },
++			(ENC_LABEL[k] || k) + (valid ? '' : _(' (not valid for MLO)')));
+ 	}));
+ 
+ 	const keyEl = E('input', {
+ 		'id': 'mlo-key',
+-		'type': 'text',
++		'type': 'password',
+ 		'class': 'cbi-input-text',
+ 		'value': initial.key,
+ 		'placeholder': _('at least 8 characters'),
+@@ -244,7 +279,7 @@
+ 				'checked': initial.bands.has(b) ? 'checked' : null,
+ 				'style': 'width:auto;margin:0'
+ 			}),
+-			BAND_LABEL[b]
++			BAND_LABEL[b] + (ehtRadio(radios[b]) ? '' : _(' (not in BE mode)'))
+ 		]);
+ 	});
+ 
+@@ -271,6 +306,7 @@
+ 
+ 	function collect() {
+ 		return {
++			sections: existing ? existing.sections.slice() : [],
+ 			ssid: ssidEl.value.trim(),
+ 			encryption: encEl.value,
+ 			key: keyEl.value,
+@@ -300,28 +336,19 @@
+ 				'class': 'btn cbi-button cbi-button-positive',
+ 				'click': function () {
+ 					const rec = collect();
+-					if (!rec.ssid) {
++					const error = validateMld(rec);
++					if (error) {
+ 						warn.style.display = '';
+-						warn.textContent = _('SSID cannot be empty.');
++						warn.textContent = error;
+ 						return;
+ 					}
+-					if (/^(psk2|sae|sae-mixed)$/.test(rec.encryption) && rec.key.length < 8) {
++					try { onSave(rec); }
++					catch (error) {
+ 						warn.style.display = '';
+-						warn.textContent = _('PSK key must be at least 8 characters.');
+-						return;
+-					}
+-					if (rec.bands.size === 0) {
+-						warn.style.display = '';
+-						warn.textContent = _('Select at least one band.');
+-						return;
+-					}
+-					if (rec.bands.size === 1) {
+-						warn.style.display = '';
+-						warn.textContent = _('MLO requires at least 2 linked bands. Add another band or disable MLO for this SSID.');
++						warn.textContent = error.message || String(error);
+ 						return;
+ 					}
+ 					ui.hideModal();
+-					onSave(rec);
+ 				}
+ 			}, _('Save'))
+ 		])
+@@ -344,77 +371,48 @@
+ }
+ 
+ function applyMld(rec) {
++	const error = validateMld(rec);
++	if (error) throw new Error(error);
+ 	const radios = radiosByBand();
+-	const target_ssid = rec.ssid;
+-	const slug = ssid_to_slug(target_ssid);
+-	const allBands = BAND_ORDER.filter(b => radios[b]);
+-
+-	/*
+-	 * Remember which bands this MLD covered BEFORE we rewrite it, so
+-	 * that un-ticking a band in an edit converts that band to a
+-	 * standalone AP (same SSID, no mlo=1) rather than deleting the
+-	 * network entirely. Bands the user never added to the MLD stay
+-	 * untouched.
+-	 */
+-	const hadBefore = new Set();
+-	uci.sections('wireless', 'wifi-iface').forEach(function (s) {
+-		if (s.mode !== 'sta' && s.ssid === target_ssid &&
+-		    (s.mlo == '1' || s.mlo === 1)) {
+-			sectionDevices(s).forEach(function (dev) {
+-				const band = uci.get('wireless', dev, 'band');
+-				if (band) hadBefore.add(band);
+-			});
+-		}
+-	});
+-
+-	/*
+-	 * Supersede any existing wifi-iface broadcasting this SSID
+-	 * (MLO or standalone) so we get a clean slate to rewrite.
+-	 */
+-	uci.sections('wireless', 'wifi-iface').forEach(function (s) {
+-		if (s.mode !== 'sta' && s.ssid === target_ssid) {
+-			uci.remove('wireless', s['.name']);
+-		}
+-	});
+-
+-	function writeCommon(iface, device) {
+-		uci.add('wireless', 'wifi-iface', iface);
+-		uci.set('wireless', iface, 'device', device);
+-		uci.set('wireless', iface, 'network', 'lan');
+-		uci.set('wireless', iface, 'mode', 'ap');
+-		uci.set('wireless', iface, 'ssid', rec.ssid);
+-		uci.set('wireless', iface, 'encryption', rec.encryption);
+-		if (/^(psk2|sae|sae-mixed)$/.test(rec.encryption)) {
+-			uci.set('wireless', iface, 'key', rec.key);
+-		}
+-		uci.set('wireless', iface, 'disabled', '0');
++	const allSections = uci.sections('wireless', 'wifi-iface');
++	const owned = rec.sections || [];
++	if (!Array.isArray(owned) || new Set(owned).size !== owned.length ||
++	    owned.some(name => !allSections.some(s => s['.name'] === name && isMloAp(s))))
++		throw new Error(_('The edited MLO group changed. Reload this page before saving.'));
++	let mldIface = owned[0];
++	if (!mldIface) {
++		const slug = ssid_to_slug(rec.ssid);
++		mldIface = slug;
++		let suffix = 1;
++		const names = new Set(uci.sections('wireless').map(s => s['.name']));
++		while (names.has(mldIface)) mldIface = slug + '_' + suffix++;
++		uci.add('wireless', 'wifi-iface', mldIface);
++		uci.set('wireless', mldIface, 'network', 'lan');
+ 	}
+-
+-	const selectedBands = allBands.filter(band => rec.bands.has(band));
++	/* Keep section identity, network membership and unrelated options on edit.
++	 * No standalone AP is ever selected by SSID or rewritten here. */
++	const selectedBands = BAND_ORDER.filter(band => rec.bands.has(band));
+ 	const selectedDevices = selectedBands.map(band => radios[band]);
+-	const mldIface = slug;
+-	writeCommon(mldIface, selectedDevices);
++	uci.set('wireless', mldIface, 'device', selectedDevices);
++	uci.set('wireless', mldIface, 'mode', 'ap');
++	uci.set('wireless', mldIface, 'ssid', rec.ssid);
++	uci.set('wireless', mldIface, 'encryption', rec.encryption);
++	if (rec.encryption === 'sae') uci.set('wireless', mldIface, 'key', rec.key);
++	else uci.unset('wireless', mldIface, 'key');
++	uci.set('wireless', mldIface, 'disabled', '0');
+ 	uci.set('wireless', mldIface, 'mlo', '1');
+ 	/* MLO and 6 GHz both require protected management frames. */
+ 	uci.set('wireless', mldIface, 'ieee80211w', '2');
+-
+-	/* A band removed from an existing MLD remains available as a normal AP. */
+-	allBands.forEach(function (band) {
+-		if (rec.bands.has(band) || !hadBefore.has(band)) return;
+-		const iface = slug + '_standalone_' + band;
+-		writeCommon(iface, radios[band]);
+-		let pmf = null;
+-		if (band === '6g' || /^(sae|owe)$/.test(rec.encryption)) pmf = '2';
+-		else if (rec.encryption === 'sae-mixed') pmf = '1';
+-		if (pmf) uci.set('wireless', iface, 'ieee80211w', pmf);
+-	});
+-}
+-
+-function deleteMld(ssid_key) {
+-	uci.sections('wireless', 'wifi-iface').forEach(function (s) {
+-		if ((s.mlo == '1' || s.mlo === 1) && s.ssid === ssid_key) {
+-			uci.remove('wireless', s['.name']);
+-		}
++	uci.unset('wireless', mldIface, 'mld_ap');
++	uci.unset('wireless', mldIface, 'mld_id');
++	owned.slice(1).forEach(name => uci.remove('wireless', name));
++}
++
++function deleteMld(rec) {
++	const sections = uci.sections('wireless', 'wifi-iface');
++	(rec.sections || []).forEach(function (name) {
++		if (sections.some(s => s['.name'] === name && isMloAp(s)))
++			uci.remove('wireless', name);
+ 	});
+ }
+ 
+@@ -441,9 +439,9 @@
+ 					});
+ 				},
+ 				function removeMld(id) {
+-					if (!confirm(_('Delete MLD group %s? The underlying wifi-iface sections will be removed on Save & Apply.').format(id)))
++					if (!confirm(_('Delete MLD group %s? The underlying wifi-iface sections will be removed on Save & Apply.').format(state.mlds[id].ssid)))
+ 						return;
+-					deleteMld(id);
++					deleteMld(state.mlds[id]);
+ 					refresh();
+ 				},
+ 				function addMld() {

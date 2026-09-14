@@ -109,6 +109,59 @@ test('Quick Wi-Fi validation and band discovery fail closed', () => {
   assert.deepEqual(api.quickWifiTargets().missing, [ '6g' ]);
 });
 
+test('enabled 5/6 GHz MLO outranks disabled factory APs without rewriting them', async () => {
+  for (const disabled of ['1', 1, true]) {
+    const { api, ifaces, devices } = fixture();
+    for (const name of ['default_radioB', 'default_radioC'])
+      ifaces.find(row => row['.name'] === name).disabled = disabled;
+    const mld = { '.name': 'mld_primary', mode: 'ap', device: ['radioB', 'radioC'],
+      network: ['lan'], mlo: '1', ssid: 'MLO', key: 'old-password', encryption: 'sae', ieee80211w: '2' };
+    ifaces.push(mld);
+    const untouched = JSON.stringify(ifaces.filter(row => !['default_radioA', 'mld_primary'].includes(row['.name'])));
+    const radios = JSON.stringify(devices);
+    const targets = api.quickWifiTargets();
+    assert.deepEqual(targets.byBand, { '2g': 'default_radioA', '5g': 'mld_primary', '6g': 'mld_primary' });
+    assert.deepEqual(targets.sections, ['default_radioA', 'mld_primary']);
+    await api.applyQuickWifi(targets, 'Truck', 'New-password-123');
+    assert.equal(mld.ssid, 'Truck');
+    assert.equal(mld.key, 'New-password-123');
+    assert.equal(mld.encryption, 'sae');
+    assert.equal(mld.ieee80211w, '2');
+    assert.deepEqual(mld.device, ['radioB', 'radioC']);
+    assert.equal(JSON.stringify(ifaces.filter(row => !targets.sections.includes(row['.name']))), untouched);
+    assert.equal(JSON.stringify(devices), radios);
+    assert.equal(ifaces.find(row => row['.name'] === 'default_radioA').encryption, 'psk2');
+  }
+});
+
+test('active MLO is selected even with enabled factory secondary APs, while guest MLO is untouched', async () => {
+  const { api, ifaces } = fixture();
+  const mld = { '.name': 'mld_primary', mode: 'ap', device: ['radioB', 'radioC'],
+    network: 'lan', mlo: true, ssid: 'MLO', key: 'old-password', encryption: 'sae' };
+  const guest = { ...mld, '.name': 'default_guest_mld', network: 'guest', ssid: 'Guest' };
+  ifaces.push(mld, guest);
+  const targets = api.quickWifiTargets();
+  assert.deepEqual(targets.sections, ['default_radioA', 'mld_primary']);
+  const other = JSON.stringify(ifaces.filter(row => !targets.sections.includes(row['.name'])));
+  await api.applyQuickWifi(targets, 'Truck', 'New-password-123');
+  assert.equal(JSON.stringify(ifaces.filter(row => !targets.sections.includes(row['.name']))), other);
+});
+
+test('disabled MLO cannot steal an active standalone AP and selection is idempotent', async () => {
+  const { api, ifaces } = fixture();
+  const mld = { '.name': 'mld_old', mode: 'ap', device: ['radioB', 'radioC'],
+    network: 'lan', mlo: '1', disabled: '1', ssid: 'Old MLO', key: 'old-password', encryption: 'sae' };
+  ifaces.push(mld);
+  const before = structuredClone(mld);
+  const targets = api.quickWifiTargets();
+  assert.deepEqual(targets.sections, ['default_radioA', 'default_radioB', 'default_radioC']);
+  await api.applyQuickWifi(targets, 'Truck', 'New-password-123');
+  const once = JSON.stringify(ifaces);
+  await api.applyQuickWifi(api.quickWifiTargets(), 'Truck', 'New-password-123');
+  assert.equal(JSON.stringify(ifaces), once);
+  assert.deepEqual(mld, before);
+});
+
 test('Quick Wi-Fi menu and ACL stay scoped to wireless configuration', () => {
   const menu = JSON.parse(fs.readFileSync(path.join(__dirname, '../files/usr/share/luci/menu.d/zbt-quick-wifi.json'), 'utf8'));
   const acl = JSON.parse(fs.readFileSync(path.join(__dirname, '../files/usr/share/rpcd/acl.d/zbt-quick-wifi.json'), 'utf8'));
@@ -200,12 +253,13 @@ test('legacy device compatibility refuses shared MLO and invalid keys before any
   assert.deepEqual(counters(), { saves: 0, applies: 0 });
 });
 
-test('legacy device compatibility rejects a selected AP outside LAN without changing Quick Wi-Fi selection', async () => {
+test('Quick Wi-Fi and legacy profile never select an AP outside LAN', async () => {
   const { api, ifaces, devices, counters } = fixture();
   const ap = ifaces.find(row => row['.name'] === 'default_radioA');
   ap.network = 'camera_vlan';
   const targets = api.quickWifiTargets();
-  assert.equal(targets.byBand['2g'], ap['.name']);
+  assert.equal(targets.byBand['2g'], undefined);
+  assert.deepEqual(targets.missing, ['2g']);
   const before = JSON.stringify([devices, ifaces]);
   await assert.rejects(api.applyCameraCompatibility(targets), /separate 2.4 GHz/);
   assert.equal(JSON.stringify([devices, ifaces]), before);

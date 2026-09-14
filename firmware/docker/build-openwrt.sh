@@ -111,6 +111,14 @@ elif ! patch --dry-run --batch --fuzz=0 --reverse -p1 -d feeds/luci < "$resource
   echo 'Mega LuCI resource-version patch does not match pinned LuCI; refusing a cache-stale build' >&2
   exit 3
 fi
+# Handle shared MLD device lists in the standard Wireless enable/disable
+# controls. Disabling a standalone AP must not shut off a peer MLO link.
+wireless_mlo_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/luci-wireless-mlo-toggle.patch"
+if patch --dry-run --batch --fuzz=0 --forward -p1 -d feeds/luci < "$wireless_mlo_patch" >/dev/null; then
+  patch --batch --fuzz=0 --forward -p1 -d feeds/luci < "$wireless_mlo_patch"
+elif ! patch --dry-run --force --fuzz=0 --reverse -p1 -d feeds/luci < "$wireless_mlo_patch" >/dev/null; then
+  echo 'Wireless MLO toggle patch does not match pinned LuCI' >&2; exit 3
+fi
 # Strict userspace-only patch against the pinned QModem feed. No kernel,
 # modem driver or wireless firmware revision changes.
 runtime_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/qmodem-dual-runtime.patch"
@@ -196,14 +204,19 @@ elif [[ -e "$legacy_modem_led_link" ]]; then
   echo 'Legacy modem LED startup path is not the expected symlink' >&2
   exit 3
 fi
-mlo_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/luci-app-mlo-shared-iface.patch"
-if patch --dry-run --batch --fuzz=0 --forward -p1 -d package/luci-app-mlo < "$mlo_patch" >/dev/null; then
-  patch --batch --fuzz=0 --forward -p1 -d package/luci-app-mlo < "$mlo_patch"
-elif ! patch --dry-run --batch --fuzz=0 --reverse -p1 -d package/luci-app-mlo < "$mlo_patch" >/dev/null; then
-  echo 'MLO shared-interface patch does not match the pinned source' >&2
-  exit 3
-fi
-grep -Eq 'writeCommon\(mldIface,[[:space:]]*selectedDevices\);' \
+# Later patches refine the shared writer. Unwind only recognized patches in
+# reverse order, covering fresh trees, previous-release caches and new caches.
+# --force is essential: -R --batch otherwise guesses forward on absent patches.
+for mlo_patch_name in luci-app-mlo-safe-edit.patch luci-app-mlo-shared-iface.patch; do
+  mlo_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/$mlo_patch_name"
+  if patch --dry-run --force --fuzz=0 --reverse -p1 -d package/luci-app-mlo < "$mlo_patch" >/dev/null; then
+    patch --force --fuzz=0 --reverse -p1 -d package/luci-app-mlo < "$mlo_patch"
+  fi
+done
+for mlo_patch_name in luci-app-mlo-shared-iface.patch luci-app-mlo-safe-edit.patch; do
+  patch --batch --fuzz=0 --forward -p1 -d package/luci-app-mlo < "$(dirname "${FILES_OVERLAY_DIR}")/patches/$mlo_patch_name"
+done
+grep -Eq "uci.set\('wireless',[[:space:]]*mldIface,[[:space:]]*'device',[[:space:]]*selectedDevices\);" \
   package/luci-app-mlo/htdocs/luci-static/resources/view/mlo/main.js || {
   echo 'MLO page did not retain the shared multi-radio writer' >&2; exit 3;
 }
@@ -408,6 +421,7 @@ make defconfig
 # OpenWrt tree. Rebuild every directly patched package so an incremental build
 # cannot ship an older dialer, QModem UI, MLO writer, or MWAN metric editor.
 make package/feeds/luci/luci-base/clean
+make package/feeds/luci/luci-mod-network/clean
 make package/base-files/clean
 make package/feeds/qmodem/qmodem/clean
 make package/feeds/qmodem/tom_modem/clean
@@ -896,9 +910,16 @@ grep -q '/etc/init.d/uhttpd disable' "${rootfs_dir}/etc/uci-defaults/50-zbt-luci
 grep -q 'if /usr/sbin/zbt-luci-backend-check' "${rootfs_dir}/etc/uci-defaults/50-zbt-luci-web-recovery" || {
   echo 'LuCI first-boot migration does not actively repair a failed nginx start' >&2; exit 4;
 }
-grep -Eq 'writeCommon\(mldIface,[[:space:]]*selectedDevices\);' \
+grep -Eq "uci.set\('wireless',[[:space:]]*mldIface,[[:space:]]*'device',[[:space:]]*selectedDevices\);" \
   "${rootfs_dir}/www/luci-static/resources/view/mlo/main.js" || {
   echo 'Corrected shared-interface MLO page is missing from the image' >&2; exit 4;
+}
+grep -Fq 'function validateMld(' "${rootfs_dir}/www/luci-static/resources/view/mlo/main.js" || {
+  echo 'Validated non-destructive MLO editor is missing from the image' >&2; exit 4;
+}
+grep -Eq 'L.toArray\(wifi_iface.device\).indexOf\(radio\)' \
+  "${rootfs_dir}/www/luci-static/resources/view/network/wireless.js" || {
+  echo 'MLD-aware Wireless enable/disable controls are missing from the image' >&2; exit 4;
 }
 # Keep the upstream package from silently restoring the global-only TTL UI
 # or old init/hotplug/default writers over this firmware's independent policy.

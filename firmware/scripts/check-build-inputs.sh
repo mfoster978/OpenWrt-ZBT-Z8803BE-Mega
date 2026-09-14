@@ -67,6 +67,11 @@ done < <(rg --files firmware/files firmware/feeds)
 
 test -s firmware/patches/luci-app-mlo-shared-iface.patch
 grep -Fq 'writeCommon(mldIface, selectedDevices);' firmware/patches/luci-app-mlo-shared-iface.patch
+test -s firmware/patches/luci-app-mlo-safe-edit.patch
+test -s firmware/patches/luci-wireless-mlo-toggle.patch
+grep -Fq 'luci-app-mlo-safe-edit.patch' firmware/docker/build-openwrt.sh
+grep -Fq 'luci-wireless-mlo-toggle.patch' firmware/docker/build-openwrt.sh
+grep -Fq 'make package/feeds/luci/luci-mod-network/clean' firmware/docker/build-openwrt.sh
 hostapd_mlo_patch=firmware/patches/hostapd-mlo-interoperability.patch
 test -s "$hostapd_mlo_patch"
 grep -Fq 'AP MLD: Clear reserved fields in EML capability for AP MLD' "$hostapd_mlo_patch"
@@ -100,6 +105,11 @@ grep -Fq "uci.set('network', section_id, 'metric', value);" \
 grep -Fq '"network"' firmware/patches/luci-app-mwan3-route-metric.patch
 grep -Fq "uci -q add_list \"wireless.\${first}.device=\${device}\"" \
   firmware/files/etc/uci-defaults/74-zbt-mlo-shared-iface-repair
+grep -Fq 'legacy_base()' firmware/files/etc/uci-defaults/74-zbt-mlo-shared-iface-repair
+if grep -Eq '(set|add_list).*wireless\.\$\{first\}\.(network|encryption|key|disabled)=' \
+  firmware/files/etc/uci-defaults/74-zbt-mlo-shared-iface-repair; then
+  echo 'MLO migration must preserve network membership, security and administrative state' >&2; exit 1
+fi
 
 # The default Argon theme loads a Mega-only responsive layer for ordinary CBI
 # pages. Keep it mobile-scoped and preserve the independently scoped About UI.

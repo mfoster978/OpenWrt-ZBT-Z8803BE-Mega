@@ -17,10 +17,11 @@ const specs = [
   ['mwan3-luci', 'openwrt/luci', 'a611522a2bfc24ca2625e8cd2fcc9404288532a6', 'luci-app-mwan3-route-metric.patch', ''],
   ['luci-first-login', 'openwrt/luci', 'a611522a2bfc24ca2625e8cd2fcc9404288532a6', 'luci-first-login-password.patch', ''],
   ['luci-resource-version', 'openwrt/luci', 'a611522a2bfc24ca2625e8cd2fcc9404288532a6', 'luci-mega-resource-version.patch', ''],
+  ['luci-wireless', 'openwrt/luci', 'a611522a2bfc24ca2625e8cd2fcc9404288532a6', 'luci-wireless-mlo-toggle.patch', ''],
   ['argon-mobile', 'immortalwrt/luci', '2a84422e7c999d038b36b9555ba5a3abc4adaa4b', 'luci-theme-argon-mega-mobile.patch', ''],
   ['ksmbd', 'openwrt/packages', 'db3b315119519f9194dad8aa668aa40618df9b20', 'ksmbd-server-disabled.patch', 'net/ksmbd-tools/'],
   ['ksmbd-luci', 'openwrt/luci', 'a611522a2bfc24ca2625e8cd2fcc9404288532a6', 'luci-app-ksmbd-enable-toggle.patch', 'applications/luci-app-ksmbd/'],
-  ['mlo', '0xFar5eer/openwrt25.12_ZBT_Z8803BE', 'edc738504fe8fae81eb15de967456204699b1830', 'luci-app-mlo-shared-iface.patch', 'package/luci-app-mlo/']
+  ['mlo', '0xFar5eer/openwrt25.12_ZBT_Z8803BE', 'edc738504fe8fae81eb15de967456204699b1830', ['luci-app-mlo-shared-iface.patch', 'luci-app-mlo-safe-edit.patch'], 'package/luci-app-mlo/']
 ];
 function run(command, args, options = {}) {
   const r = spawnSync(command, args, { encoding: 'utf8', timeout: 60000, ...options });
@@ -202,6 +203,9 @@ ${dispatch}
     }
   });
   process.stdout.write(result);
+  process.stdout.write(run(process.execPath, ['--test', path.join(__dirname, 'wireless-mlo-toggle.test.cjs'), path.join(__dirname, 'wifi-build-cache.test.cjs')], {
+    env: { ...process.env, WIRELESS_TEST_TREE: path.join(tmp, 'luci-wireless'), LUCI_TEST_TREE: path.join(tmp, 'luci-resource-version'), MLO_TEST_TREE: path.join(tmp, 'mlo') }
+  }));
   process.stdout.write(run(process.execPath, ['--test',
     path.join(__dirname, 'modem-usb-reset.test.cjs'),
     path.join(__dirname, 'modem-usb-reset-write-effect.test.cjs'),

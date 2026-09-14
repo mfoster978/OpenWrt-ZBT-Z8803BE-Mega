@@ -25,10 +25,18 @@ function radiosByBand() {
 function isLanAp(section) {
 	var mode = section.mode || 'ap';
 	var networks = asList(section.network);
-	return mode === 'ap' && networks.indexOf('guest') === -1;
+	return mode === 'ap' && networks.indexOf('lan') !== -1 && networks.indexOf('guest') === -1;
 }
 
-function targetScore(section) {
+function isMlo(section) {
+	return section.mlo === '1' || section.mlo === 1 || section.mlo === true;
+}
+
+function isDisabled(section) {
+	return section.disabled === '1' || section.disabled === 1 || section.disabled === true;
+}
+
+function targetScore(section, band) {
 	var name = section['.name'] || '';
 	var networks = asList(section.network);
 	var score = 0;
@@ -38,10 +46,14 @@ function targetScore(section) {
 		score += 80;
 	if (/^WIFI7-/i.test(section.ssid || ''))
 		score += 30;
-	if (section.mlo === '1' || section.mlo === 1 || section.mlo === true)
-		score += 20;
-	if (section.disabled !== '1' && section.disabled !== 1 && section.disabled !== true)
-		score += 10;
+	// Active APs outrank retained, disabled factory defaults. On 5/6 GHz,
+	// the active shared MLD is the primary network; keep a separate 2.4 GHz
+	// AP preferred for legacy clients. Never change its security to match MLO.
+	if ((band === '2g' && !isMlo(section) && asList(section.device).length === 1) ||
+		(band !== '2g' && isMlo(section)))
+		score += 300;
+	if (!isDisabled(section))
+		score += 10000;
 	if (/guest/i.test(name))
 		score -= 1000;
 	return score;
@@ -63,7 +75,7 @@ function quickWifiTargets() {
 		var candidates = accessPoints.filter(function(section) {
 			return asList(section.device).indexOf(radio) !== -1;
 		}).sort(function(a, b) {
-			var difference = targetScore(b) - targetScore(a);
+			var difference = targetScore(b, band) - targetScore(a, band);
 			return difference || String(a['.name']).localeCompare(String(b['.name']));
 		});
 
@@ -320,6 +332,13 @@ return view.extend({
 		return E('div', { 'class': 'cbi-map' }, [
 			E('h2', {}, _('Quick Wi-Fi Setup')),
 			E('p', { 'class': 'cbi-map-descr' }, _('Set one network name and password for the primary 2.4 GHz, 5 GHz, and 6 GHz access points. Advanced Wi-Fi and security settings are left unchanged.')),
+			E('div', { 'class': 'cbi-section' }, BAND_ORDER.map(function(band) {
+				var section = targets.byBand[band];
+				return E('p', {}, '%s: %s%s'.format(BAND_LABEL[band], section ?
+					(uci.get('wireless', section, 'ssid') || section) : _('not found'),
+					section && isMlo({ mlo: uci.get('wireless', section, 'mlo') }) ? _(' (shared MLO network)') : ''));
+			})),
+			E('p', {}, _('Only the networks listed above are updated. Guest networks and other secondary access points are left unchanged. Matching names does not add the legacy 2.4 GHz network to MLO.')),
 			!ready ? E('div', { 'class': 'alert-message warning' }, _('Setup cannot continue because these primary bands were not found: %s. Use Network → Wireless to repair or create them first.').format(missingText || _('unknown'))) : null,
 			E('div', { 'class': 'cbi-section' }, [
 				E('div', { 'class': 'cbi-section-node' }, [
