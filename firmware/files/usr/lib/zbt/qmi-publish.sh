@@ -6,8 +6,11 @@ zbt_qmi_route_cache_file() {
 }
 
 zbt_qmi_cache_ipv4_route() {
-	local modem_config="$1" modem_netcard="$2" qmi_ifindex="$3" route address gateway metric file tmp
+	local modem_config="$1" modem_netcard="$2" qmi_ifindex="$3" route address gateway metric file tmp pid
 	[ -n "$qmi_ifindex" ] || return 1
+	read -r pid 2>/dev/null < "${MODEM_RUNDIR:-/var/run/qmodem}/${modem_config}_dir/$modem_config.pid" || return 1
+	case "$pid" in ''|*[!0-9]*|0|1) return 1 ;; esac
+	kill -0 "$pid" 2>/dev/null || return 1
 	address=$(ip -o -4 addr show dev "$modem_netcard" scope global 2>/dev/null |
 		awk '/ inet/ && !/ tentative| dadfailed/ {print $4; exit}')
 	[ -n "$address" ] || return 1
@@ -21,24 +24,27 @@ zbt_qmi_cache_ipv4_route() {
 	file=$(zbt_qmi_route_cache_file "$modem_config")
 	mkdir -p "${file%/*}" || return 1
 	tmp="$file.$$"
-	printf '%s %s %s %s\n' "$qmi_ifindex" "$address" "$gateway" "$metric" > "$tmp" || { rm -f "$tmp"; return 1; }
+	printf '%s %s %s %s %s\n' "$pid" "$qmi_ifindex" "$address" "$gateway" "$metric" > "$tmp" || { rm -f "$tmp"; return 1; }
 	mv -f "$tmp" "$file"
 }
 
-# Repair only a route that was observed on the same live CM session identity.
-# A cached route is rejected after USB re-enumeration, address change or device
-# change, so a stale carrier lease can never be installed on a new session.
+# Repair only a route observed on this exact supervised CM process. PID,
+# ifindex and address must all still match. Add, never replace, so recovery
+# cannot overwrite a healthy backup WAN default route.
 zbt_qmi_restore_ipv4_route() {
-	local modem_config="$1" modem_netcard="$2" qmi_ifindex="$3" file cached_index cached_address gateway metric current
+	local modem_config="$1" modem_netcard="$2" qmi_ifindex="$3" file cached_pid cached_index cached_address gateway metric current current_pid
 	[ -z "$(ip -4 route show table main default dev "$modem_netcard" 2>/dev/null)" ] || return 0
 	file=$(zbt_qmi_route_cache_file "$modem_config")
-	read -r cached_index cached_address gateway metric 2>/dev/null < "$file" || return 1
-	case "$cached_index:$metric" in *[!0-9:]*|:*|*:) return 1 ;; esac
+	read -r cached_pid cached_index cached_address gateway metric 2>/dev/null < "$file" || return 1
+	case "$cached_pid:$cached_index:$metric" in *[!0-9:]*|:*|*:) return 1 ;; esac
+	read -r current_pid 2>/dev/null < "${MODEM_RUNDIR:-/var/run/qmodem}/${modem_config}_dir/$modem_config.pid" || return 1
+	[ "$current_pid" = "$cached_pid" ] || return 1
+	kill -0 "$current_pid" 2>/dev/null || return 1
 	[ "$cached_index" = "$qmi_ifindex" ] || return 1
 	current=$(ip -o -4 addr show dev "$modem_netcard" scope global 2>/dev/null |
 		awk '/ inet/ && !/ tentative| dadfailed/ {print $4; exit}')
 	[ -n "$current" ] && [ "$current" = "$cached_address" ] || return 1
-	ip -4 route replace default via "$gateway" dev "$modem_netcard" metric "$metric" || return 1
+	ip -4 route add default via "$gateway" dev "$modem_netcard" metric "$metric" || return 1
 	[ -n "$(ip -4 route show table main default dev "$modem_netcard" 2>/dev/null)" ] || return 1
 	logger -t zbt-mwan-reconcile "iface=$modem_config family=4 device=$modem_netcard action=restore_cm_main_route gateway=$gateway metric=$metric result=verified"
 }
@@ -178,15 +184,13 @@ zbt_qmi_reconcile_publication() (
 	local modem_config="$1" family="$2" modem_netcard="$3" qmi_ifindex="$4" interface status proto attempt
 	interface=$modem_config
 	[ "$family" != 6 ] || interface=${modem_config}v6
+	# Pre-lock checks are read-only. The route repair itself is a mutation and
+	# must happen only while holding the shared QMI/netifd lock.
 	zbt_qmi_session_owned "$modem_config" "$family" "$modem_netcard" "$qmi_ifindex" || return 1
-	if [ "$family" = 4 ]; then
-		zbt_qmi_restore_ipv4_route "$modem_config" "$modem_netcard" "$qmi_ifindex" || return 1
-	fi
-	zbt_qmi_session_active "$modem_config" "$family" "$modem_netcard" "$qmi_ifindex" || return 1
 	exec 1002>/var/lock/zbt-qmi-netifd.lock
 	flock -w 10 1002 || return 1
 	# Recheck ownership after waiting for the dialer's shared lock. Only that
-	# live session can authorize removal of a stale generated disabled flag.
+	# exact live session may authorize route or netifd repair.
 	zbt_qmi_session_owned "$modem_config" "$family" "$modem_netcard" "$qmi_ifindex" || return 1
 	if [ "$family" = 4 ]; then
 		zbt_qmi_restore_ipv4_route "$modem_config" "$modem_netcard" "$qmi_ifindex" || return 1
