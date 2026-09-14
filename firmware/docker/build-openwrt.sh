@@ -727,8 +727,8 @@ done
 [ "$(readlink "${rootfs_dir}/etc/rc.d/S99modem_watchdog")" = ../init.d/modem_watchdog ] || {
   echo 'Central modem watchdog lacks its boot service link' >&2; exit 4;
 }
-grep -Fq 'sleep 8' "${rootfs_dir}/usr/lib/zbt/modem-recovery.sh" || {
-  echo 'RM551E GPIO recovery pulse is shorter than the validated interval' >&2; exit 4;
+grep -Fq 'sleep 10' "${rootfs_dir}/usr/lib/zbt/modem-recovery.sh" || {
+  echo 'RM551E ten-second GPIO recovery pulse is missing from the image' >&2; exit 4;
 }
 if grep -Fq 'kernel-data-path-lost' "${rootfs_dir}/usr/lib/zbt/qmi-session.sh"; then
   echo 'QMI supervisor must not tear down a live CM during route publication gaps' >&2; exit 4;
