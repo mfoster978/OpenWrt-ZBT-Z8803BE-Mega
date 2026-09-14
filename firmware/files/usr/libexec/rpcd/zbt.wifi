@@ -1,0 +1,64 @@
+#!/bin/sh
+# On-demand read-only connection evidence. Never export wireless UCI or return
+# keys, hostapd configuration, packet payloads, or unrestricted system logs.
+case "$1:$2" in
+	list:*) echo '{"diagnostics":{}}'; exit 0 ;;
+	call:diagnostics) read -r input ;;
+	*) exit 1 ;;
+esac
+
+command -v jq >/dev/null 2>&1 || { echo '{"ok":false}'; exit 0; }
+wireless=$(ubus -t 3 call network.wireless status 2>/dev/null) || {
+	echo '{"ok":false}'; exit 0;
+}
+printf '%s' "$wireless" | jq -e 'type == "object"' >/dev/null 2>&1 || {
+	echo '{"ok":false}'; exit 0;
+}
+access_points='[]'
+for radio in $(printf '%s' "$wireless" | jq -r 'keys[]'); do
+	case "$radio" in ''|*[!a-zA-Z0-9_]* ) continue ;; esac
+	[ "$(uci -q get "wireless.$radio.band")" = 2g ] || continue
+	for iface in $(printf '%s' "$wireless" | jq -r --arg radio "$radio" \
+		'.[$radio].interfaces[]? | select((.config.mode // "ap") == "ap") | .ifname // empty'); do
+		case "$iface" in ''|*[!a-zA-Z0-9_.-]* ) continue ;; esac
+		ssid=$(printf '%s' "$wireless" | jq -r --arg radio "$radio" --arg iface "$iface" \
+			'.[$radio].interfaces[]? | select(.ifname == $iface) | .config.ssid // ""')
+		clients=$(ubus -t 3 call "hostapd.$iface" get_clients 2>/dev/null) || clients='{}'
+		clients=$(printf '%s' "$clients" | jq -c 'if type == "object" then . else {} end' 2>/dev/null) || clients='{}'
+		# dnsmasq defaults here, but honor custom DHCP lease locations too.
+		leasefile=$(uci -q get 'dhcp.@dnsmasq[0].leasefile')
+		leasefile=${leasefile:-/tmp/dhcp.leases}
+		leases=$(awk -v now="$(date +%s)" 'NF >= 3 && ($1 == 0 || $1 > now) { print tolower($2), $3 }' "$leasefile" 2>/dev/null | \
+			jq -Rsc 'split("\n") | map(split(" ") | select(length == 2) | {mac:.[0], address:.[1]})')
+		ap=$(printf '%s' "$clients" | jq -c --arg iface "$iface" --arg ssid "$ssid" --argjson leases "$leases" '
+			{iface:$iface, ssid:$ssid, available:(.clients|type == "object"),
+			 clients:[(.clients | if type == "object" then . else {} end | to_entries[]) |
+				select(.value | type == "object") |
+				(.key|ascii_downcase) as $mac |
+				{mac:$mac, associated:(.value.assoc == true), authorized:(.value.authorized == true),
+				 addresses:[$leases[] | select(.mac == $mac) | .address]}]}')
+		access_points=$(printf '%s' "$access_points" | jq -c --argjson ap "$ap" '. + [$ap]')
+	done
+done
+# Return only fixed event categories and validated MACs, not whole log lines:
+# an SSID or a debug value can itself contain a connection-event substring.
+events=$(logread 2>/dev/null | tail -n 500 | awk '
+	function valid_mac(mac, octets, count, i) {
+		count = split(mac, octets, ":")
+		if (count != 6) return 0
+		for (i = 1; i <= count; i++)
+			if (octets[i] !~ /^[0-9a-fA-F][0-9a-fA-F]$/) return 0
+		return 1
+	}
+	/hostapd/ {
+		if (match($0, /(AP-STA-CONNECTED|AP-STA-DISCONNECTED|AP-STA-POSSIBLE-PSK-MISMATCH|EAPOL-4WAY-HS-COMPLETED|CTRL-EVENT-EAP-FAILURE) [0-9a-fA-F:]+/)) {
+			split(substr($0, RSTART, RLENGTH), fields, " ")
+			if (valid_mac(fields[2])) print fields[1] " " tolower(fields[2])
+		} else if (match($0, /STA [0-9a-fA-F:]+ IEEE 802.11: (authenticated|associated|deauthenticated|disassociated)/)) {
+			split(substr($0, RSTART, RLENGTH), fields, " ")
+			if (valid_mac(fields[2])) print fields[5] " " tolower(fields[2])
+		}
+	}
+' | tail -n 60 | jq -Rsc 'split("\n") | map(select(length > 0))')
+jq -cn --argjson access_points "$access_points" --argjson events "$events" \
+	'{ok:true, access_points:$access_points, events:$events}'

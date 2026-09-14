@@ -638,6 +638,7 @@ required_overlay_files=(
   usr/lib/zbt/qmi-publish.sh
   usr/lib/zbt/qmi-session.sh
   usr/lib/zbt/qmodem-start.sh
+  usr/libexec/rpcd/zbt.wifi
   usr/lib/zbt/modem-leds.sh
   usr/sbin/zbt-modem-led-poller
   usr/sbin/zbt-mwan-diagnostics
@@ -717,7 +718,7 @@ for overlay_file in "${required_overlay_files[@]}"; do
   fi
 done
 echo "Validated files overlay in root filesystem: ${rootfs_dir}"
-for component in usr/sbin/zbt-mwan-apply usr/sbin/zbt-5g-adaptive usr/sbin/zbt-mwan-failback usr/lib/zbt/qmodem-start.sh usr/sbin/conntrack usr/bin/util-linux-flock; do
+for component in usr/sbin/zbt-mwan-apply usr/sbin/zbt-5g-adaptive usr/sbin/zbt-mwan-failback usr/lib/zbt/qmodem-start.sh usr/libexec/rpcd/zbt.wifi usr/sbin/conntrack usr/bin/util-linux-flock; do
   test -x "${rootfs_dir}/$component" || { echo "Missing adaptive/failback executable: $component" >&2; exit 4; }
 done
 [ "$(readlink "${rootfs_dir}/etc/rc.d/S99zbt-5g-adaptive")" = ../init.d/zbt-5g-adaptive ] || {
@@ -735,6 +736,12 @@ fi
 grep -Fq 'result=worker-registered' "${rootfs_dir}/usr/lib/zbt/modem-recovery.sh" || {
   echo 'Watchdog recovery does not verify persistent QModem worker registration' >&2; exit 4;
 }
+test -s "${rootfs_dir}/lib/mwan3/libwrap_mwan3_sockopt.so.1.0" || {
+  echo 'Watchdog MultiWAN probe socket binding library is missing' >&2; exit 4;
+}
+for overlay_file in usr/libexec/rpcd/zbt.wifi usr/lib/zbt/modem-health.sh usr/lib/zbt/modem-recovery.sh usr/sbin/zbt-mwan-diagnostics; do
+  cmp "${FILES_OVERLAY_DIR}/${overlay_file}" "${rootfs_dir}/${overlay_file}" || exit 4
+done
 grep -Fq 'Automatic preferred — modem/network selection (recommended)' \
   "${rootfs_dir}/www/luci-static/resources/view/qmodem/config_advanced.js" || exit 4
 test -x "${rootfs_dir}/usr/sbin/zbt-speedify-guard" &&

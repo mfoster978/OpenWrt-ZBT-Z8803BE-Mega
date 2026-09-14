@@ -7,6 +7,10 @@ const root = path.resolve(__dirname, '../..');
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'mega-health-'));
 after(() => fs.rmSync(temp, { recursive: true, force: true }));
 const source = p => fs.readFileSync(path.join(root, p), 'utf8');
+// Socket behavior is exercised with the real mwan3 wrapper by the namespace
+// regression. These command mocks need a harmless, loadable host library.
+const mockSockopt = ['/lib/x86_64-linux-gnu/libc.so.6', '/lib/aarch64-linux-gnu/libc.so.6'].find(p => fs.existsSync(p));
+assert.ok(mockSockopt, 'host libc is required for mocked socket environment');
 const lib = ['dual-modem.sh', 'modem-health.sh', '5g-state.sh', 'modem-recovery.sh'].map(p =>
   source('firmware/files/usr/lib/zbt/' + p).replace(/^\. \/usr\/lib\/zbt\/.*$/gm, '')).join('\n')
   .replaceAll('/etc/init.d/qmodem_network', 'service');
@@ -32,8 +36,13 @@ ip() {
   '-o -6 addr show'*) [ "$ADDR6" != 1 ] || echo '17: wwan inet6 2001:db8::2/64 scope global' ;;
  esac
 }
-ping() { echo "ping $*" >> "$DB/calls"; case "$*" in *"$GOOD_FAMILY -I $GOOD_DEVICE"*) [ -n "$GOOD_DEVICE" ] ;; *) return 1 ;; esac; }
+ping() {
+ echo "socket family=$FAMILY device=$DEVICE source=$SRCIP mark=$FWMARK" >> "$DB/calls"
+ echo "ping $*" >> "$DB/calls"
+ case "$*" in *"$GOOD_FAMILY -I $GOOD_DEVICE"*) [ -n "$GOOD_DEVICE" ] ;; *) return 1 ;; esac
+}
 curl() {
+ echo "socket family=$FAMILY device=$DEVICE source=$SRCIP mark=$FWMARK" >> "$DB/calls"
  echo "curl $*" >> "$DB/calls"
  case "$*" in *"--interface if!$GOOD_HTTP_DEVICE"*) [ -n "$GOOD_HTTP_DEVICE" ] && printf 204 ;; *) return 1 ;; esac
 }
@@ -65,7 +74,7 @@ sleep() {
 cycle() { zbt_health_probe 4_1 || :; zbt_health_save 4_1; zbt_recovery_check 4_1 modem1; echo $(( $(cat "$DB/clock") + 30 )) > "$DB/clock"; }
 `;
   const result=spawnSync('busybox',['sh','-c',lib+'\n'+mocks+'\n'+body], {encoding:'utf8',timeout:10000,
-    env:{...process.env,DB:d,ZBT_SYSFS:path.join(d,'sys'),ZBT_HEALTH_DIR:path.join(d,'health'),ZBT_5G_STATE:path.join(d,'radio'),ZBT_RECOVERY_DIR:path.join(d,'recovery'),GOOD_FAMILY:'-4',GOOD_DEVICE:'',REGISTER_WORKER:'1',...options}});
+    env:{...process.env,DB:d,ZBT_SYSFS:path.join(d,'sys'),ZBT_HEALTH_DIR:path.join(d,'health'),ZBT_5G_STATE:path.join(d,'radio'),ZBT_RECOVERY_DIR:path.join(d,'recovery'),ZBT_MWAN_SOCKOPT:mockSockopt,GOOD_FAMILY:'-4',GOOD_DEVICE:'',REGISTER_WORKER:'1',...options}});
   assert.ifError(result.error); assert.equal(result.status,0,result.stderr+result.stdout);
   return {d,out:result.stdout,calls:fs.existsSync(path.join(d,'calls'))?fs.readFileSync(path.join(d,'calls'),'utf8'):''};
 }
@@ -73,9 +82,27 @@ test('direct probes cannot succeed through the working peer; either family can p
   const f=fixture('zbt_health_probe 4_1 || :; echo "$ZBT_HEALTH:$ZBT_HEALTH4:$ZBT_HEALTH6"; zbt_health_probe 2_1 || :; echo "$ZBT_HEALTH"',{GOOD_DEVICE:'wwan3'});
   assert.equal(f.out,'offline:offline:absent\nonline\n');
   assert.match(f.calls,/-4 -I wwan8 -c 1 -W 2 1.1.1.1/);
+  assert.match(f.calls,/socket family=ipv4 device=wwan8 source=192\.0\.0\.2 mark=16128/);
   const v6=fixture('zbt_health_probe 4_1; zbt_health_save 4_1; zbt_health_online 4_1; echo "$ZBT_HEALTH:$ZBT_HEALTH4:$ZBT_HEALTH6"',{ADDR4:'0',ADDR6:'1',GOOD_FAMILY:'-6',GOOD_DEVICE:'wwan8'});
   assert.equal(v6.out,'online:absent:online\n');
   assert.doesNotMatch(v6.calls,/-4 -I/);
+  assert.match(v6.calls,/socket family=ipv6 device=wwan8 source=2001:db8::2 mark=16128/);
+});
+test('physical health probes use the configured mwan3 bypass mask before netifd publication',()=>{
+  const f=fixture('echo 0x7f00 > "$DB/uci/mwan3.globals.mmx_mask"; zbt_health_probe 4_1; echo "$ZBT_HEALTH"',{GOOD_DEVICE:'wwan8'});
+  assert.equal(f.out,'online\n');
+  assert.match(f.calls,/socket family=ipv4 device=wwan8 source=192\.0\.0\.2 mark=32512/);
+  assert.doesNotMatch(f.calls,/service /);
+});
+test('missing socket wrapper or invalid bypass mark cannot be counted as a modem outage',()=>{
+  for (const body of ['ZBT_MWAN_SOCKOPT=/missing/mwan-wrapper', 'echo invalid > "$DB/uci/mwan3.globals.mmx_mask"']) {
+    const f=fixture(`${body}; cycle; cycle; cycle; cycle; cat "$DB/recovery/4_1.state"; echo "$ZBT_HEALTH"`);
+    assert.match(f.out,/^0 0 0 0 .*\nunknown\n$/);
+    assert.match(f.calls,/result=deferred reason=mwan-socket-binding-unavailable/);
+    assert.doesNotMatch(f.calls,/service |^ping /m);
+  }
+  const deferred=fixture('cycle; cycle; cycle; ZBT_MWAN_SOCKOPT=/missing/mwan-wrapper; echo 700 > "$DB/clock"; cycle; cycle; cycle');
+  assert.equal((deferred.calls.match(/service hang 4_1/g)||[]).length,1,'indeterminate checks cannot escalate an earlier redial to GPIO');
 });
 test('strict device-bound HTTPS 204 proves Internet when the carrier drops ICMP',()=>{
   const f=fixture('zbt_health_probe 4_1; echo "$ZBT_HEALTH:$ZBT_HEALTH4:$ZBT_HEALTH6"',{GOOD_HTTP_DEVICE:'wwan8'});

@@ -20,7 +20,20 @@ for slot in 4_1 2_1; do
 	printf 'mwan_enabled=%s proto=%s modem_owner=%s\n' "$(uci -q get "mwan3.$slot.enabled")" "$(uci -q get "network.$slot.proto")" "$(uci -q get "network.$slot.modem_config")"
 	ubus call "network.interface.$slot" status 2>/dev/null | jq '{up,pending,available,autostart,proto,device,l3_device,"ipv4-address","ipv6-address"}'
 done
+printf '\nWatchdog and dial workers (running state and PID):\n'
+for service in modem_watchdog qmodem_network; do
+	ubus -t 5 call service list "{\"name\":\"$service\"}" 2>/dev/null |
+		jq --arg service "$service" '{service:$service, instances:((.[$service].instances // {}) | with_entries(.value |= {running,pid,exit_code}))}'
+done
+printf '\nRecovery counters: failures successes last_attempt redials window_start attempts_in_window rx_errors ifindex\n'
+for slot in 4_1 2_1; do
+	printf '%s: ' "$slot"; cat "/tmp/modem-watchdog/$slot.state" 2>/dev/null || echo unknown
+done
+printf '\nModem GPIO power (saved switch value / current hardware value; read-only):\n'
+for power in 5g1 5g2; do
+	printf '%s saved=%s current=%s\n' "$power" "$(uci -q get "system.$power.value")" "$(cat "/sys/class/gpio/$power/value" 2>/dev/null || echo unknown)"
+done
 printf '\nIPv4 rules:\n'; ip -4 rule show
 printf '\nIPv6 rules:\n'; ip -6 rule show
-printf '\nRecent failback and recovery events:\n'
-logread | grep -E 'zbt-mwan-failback|zbt-mwan-reconcile|modem-watchdog' | tail -30
+printf '\nRecent modem lifecycle, failback and recovery events:\n'
+logread | grep -E 'zbt-mwan-failback|zbt-mwan-reconcile|modem-watchdog|zbt-qmi-session|qmodem_network' | tail -60

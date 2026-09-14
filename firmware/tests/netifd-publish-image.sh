@@ -103,8 +103,12 @@ echo 'PASS: repeated repair emits no notify_proto; stale external probe state do
 ubus call network reload >/dev/null
 sleep 1
 ubus call network.interface.4_1 status | jq -e '.autostart==true' >/dev/null
-ip addr replace 192.0.0.2/27 dev qmitest
-ip route replace default via 192.0.0.1 dev qmitest metric 200
+# Do not silently restore the CM path here: doing so would hide a reload
+# regression that removes the primary's address/route when its peer starts.
+ip -o -4 addr show dev qmitest | grep -q '192.0.0.2/27'
+ip -4 route show default dev qmitest | grep -q 'via 192.0.0.1'
+ip -o -4 addr show dev qmitest2 | grep -q '10.233.98.190/30'
+ip -4 route show default dev qmitest2 | grep -q 'via 10.233.98.189'
 zbt_qmi_reconcile_publication 4_1 4 qmitest "$qmi_ifindex"
 ubus call network.interface.4_1 status | jq -e '.up==true and .autostart==true and .["ipv4-address"][0].address=="192.0.0.2"' >/dev/null
 echo 'PASS: unrelated network reload retains autostart and supervised Modem 1 republishes without touching Modem 2'

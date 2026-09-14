@@ -31,6 +31,9 @@ zbt_recovery_action() (
 	zbt_5g_lock || exit 75
 	# The connection may have recovered since the parent collected its sample.
 	zbt_health_probe "$section" && exit 0
+	# Missing policy-bypass support is an indeterminate probe, not permission
+	# to reset a modem. Preserve the retry budget until a real sample is possible.
+	[ "$ZBT_HEALTH" = offline ] || exit 75
 	# Active adaptive trials hold this same flock. A crashed trial may leave
 	# its journal; preserve it so the next dial restores the previous mode.
 	mkdir -p "$ZBT_RECOVERY_DIR"
@@ -150,13 +153,15 @@ zbt_recovery_check() {
 	if [ "$ZBT_HEALTH" = online ]; then
 		good=$((good + 1))
 		if [ "$good" -ge 3 ]; then fails=0; attempts=0; rm -f "$ZBT_RECOVERY_DIR/$section.qmi-lost"; fi
-	else
+	elif [ "$ZBT_HEALTH" = offline ]; then
 		good=0; fails=$((fails + 1))
+	else
+		good=0
 	fi
 	[ $((now - window)) -lt 3600 ] || { window=$now; cycles=0; }
 	# Every destructive request is bounded, serialized with radio changes,
 	# and gated on current direct failures, never on an old mwan3 status.
-	if [ "$ZBT_HEALTH" != online ] && [ "$fails" -ge "$threshold" ] &&
+	if [ "$ZBT_HEALTH" = offline ] && [ "$fails" -ge "$threshold" ] &&
 		[ "$now" -ge "$grace" ] && { [ "$last" = 0 ] || [ $((now - last)) -ge "$cooldown" ]; } &&
 		[ "$cycles" -lt 3 ]; then
 		action=$(zbt_recovery_get "$key.action")

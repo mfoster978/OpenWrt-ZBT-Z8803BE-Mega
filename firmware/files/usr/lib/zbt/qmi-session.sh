@@ -55,6 +55,22 @@ zbt_qmi_child_alive() {
 	' "/proc/$cm_pid/status" 2>/dev/null
 }
 
+zbt_qmi_report_exit() {
+	local current index
+	current=$(zbt_netdev "$modem_config" 2>/dev/null) || current=absent
+	index=$(cat "${ZBT_SYSFS:-/sys}/class/net/$current/ifindex" 2>/dev/null) || index=absent
+	# Report the cause before cleanup changes either netifd or the data device.
+	# Deliberately omit command arguments, subscriber identities and addresses.
+	logger -t qmodem_network "slot=$modem_config action=cm-session-ending reason=$1 cm_status=$2 cm_pid=${cm_pid:-none} device=$modem_netcard ifindex=$qmi_ifindex current_device=$current current_ifindex=$index"
+}
+
+zbt_qmi_signal() {
+	trap '' INT TERM
+	zbt_qmi_report_exit "signal-$1" pending
+	zbt_qmi_cleanup
+	exit 0
+}
+
 zbt_qmi_cleanup() {
 	local attempt=0
 	# Owned live child only; never use a previous boot's PID file or killall.
@@ -75,6 +91,7 @@ zbt_qmi_cleanup() {
 
 zbt_qmi_session() {
 	local qmi_ifindex cm_pid='' qmi_published4='' qmi_published6='' family interface
+	local exit_reason=cm-exited exit_status=1
 	. /usr/lib/zbt/mwan-runtime.sh
 	. /usr/lib/zbt/qmi-publish.sh
 	case "$modem_config" in 4_1|2_1) ;; *) return 1 ;; esac
@@ -82,7 +99,8 @@ zbt_qmi_session() {
 	# Bridge passthrough does not assign the router a WAN address. Do not
 	# supervise its reachability or flush an enslaved device.
 	if [ "$bridge_enabled" != 1 ]; then zbt_qmi_owned || return 1; fi
-	trap 'trap "" INT TERM; zbt_qmi_cleanup; exit 0' INT TERM
+	trap 'zbt_qmi_signal INT' INT
+	trap 'zbt_qmi_signal TERM' TERM
 	zbt_qmi_flush
 	# set_if may be a no-op on redial; re-arm the logical interfaces that the
 	# preceding child cleanup took down, even when UCI already matches.
@@ -92,7 +110,7 @@ zbt_qmi_session() {
 	printf '%s\n' "$cm_pid" > "${MODEM_RUNDIR}/${modem_config}_dir/$modem_config.pid"
 	while zbt_qmi_child_alive; do
 		if [ "$bridge_enabled" != 1 ]; then
-			zbt_qmi_owned || break
+			zbt_qmi_owned || { exit_reason=usb-device-changed; break; }
 			# Address/default-route publication is allowed to disappear and be
 			# repaired independently. In particular, a short netifd or mwan3
 			# transition must never kill a healthy CM data call. The central
@@ -108,11 +126,23 @@ zbt_qmi_session() {
 		fi
 		sleep 5
 	done
+	if [ "$exit_reason" = cm-exited ]; then
+		# wait retains a child's real exit/signal result even after it has been
+		# reaped asynchronously. Log it before cleanup can overwrite $?.
+		exit_status=0
+		wait "$cm_pid" 2>/dev/null || exit_status=$?
+		zbt_qmi_report_exit "$exit_reason" "$exit_status"
+	else
+		zbt_qmi_report_exit "$exit_reason" pending
+	fi
 	mkdir -p /tmp/modem-watchdog
 	zbt_qmi_now > "/tmp/modem-watchdog/$modem_config.qmi-lost"
 	zbt_qmi_cleanup
 	trap - INT TERM
 	# The per-slot dial supervisor owns the delayed retry. Never loop here and
 	# instantly re-add the stale address/default route removed after failure.
-	return 1
+	# A CM exiting successfully still ended a connection that should persist.
+	# Keep retries for that case; propagate other results to the dial worker.
+	[ "$exit_status" -ne 0 ] || exit_status=1
+	return "$exit_status"
 }

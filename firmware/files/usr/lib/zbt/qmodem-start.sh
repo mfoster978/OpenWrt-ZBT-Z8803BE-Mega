@@ -79,7 +79,21 @@ zbt_qmodem_launch_lock() {
 
 zbt_qmodem_launch() {
 	local section="$1" waited=0 stable=0 result
-	zbt_qmodem_launch_lock || return 75
+	case "$section" in 4_1|2_1) ;; *) return 2 ;; esac
+	# A procd timeout can kill this parent before the old dialer finishes its
+	# cleanup. Let the dialer inherit a per-slot lifetime lock so a replacement
+	# cannot race that cleanup even after this parent is forcibly terminated.
+	# Never explicitly unlock it: flock -u would release the child's shared
+	# open-file-description lock too. Each owner only closes its own descriptor.
+	# fd9 belongs to the 5G radio transaction; keep this inherited descriptor
+	# separate from it and the upstream procd/MWAN/netifd locks (1000-1002).
+	exec 1003>"/var/lock/zbt-qmodem-session-$section.lock"
+	if ! flock -n 1003; then
+		exec 1003>&-
+		logger -t qmodem_network "slot=$section action=auto-dial readiness=previous-session-active retry_seconds=5"
+		return 75
+	fi
+	zbt_qmodem_launch_lock || { exec 1003>&-; return 75; }
 	(
 		exec 8>&-
 		exec /usr/share/qmodem/modem_dial.sh "$section" dial
@@ -100,9 +114,17 @@ zbt_qmodem_launch() {
 	done
 	flock -u 8
 	exec 8>&-
-	wait "$zbt_qmodem_child"
-	result=$?
+	# ash returns from wait as soon as a trapped TERM/INT is delivered. The
+	# forwarded signal only begins the dialer's CM/netifd/address cleanup.
+	# Keep owning and waiting for that child until it actually exits; recovery
+	# uses this parent's lifetime to decide when a replacement may safely dial.
+	while :; do
+		result=0
+		wait "$zbt_qmodem_child" || result=$?
+		zbt_qmodem_child_alive || break
+	done
 	zbt_qmodem_child=''
+	exec 1003>&-
 	return "$result"
 }
 

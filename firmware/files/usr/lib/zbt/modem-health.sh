@@ -11,8 +11,33 @@ zbt_modem_enabled() {
 	[ "$(uci -q get "qmodem.$1.enable_dial")" = 1 ] &&
 	[ "$(uci -q get "qmodem.$1.en_bridge")" != 1 ]
 }
+zbt_health_socket_ready() {
+	local mask digits
+	ZBT_HEALTH_SOCKOPT=${ZBT_MWAN_SOCKOPT:-/lib/mwan3/libwrap_mwan3_sockopt.so.1.0}
+	[ -r "$ZBT_HEALTH_SOCKOPT" ] || return 1
+	mask=$(uci -q get mwan3.globals.mmx_mask 2>/dev/null)
+	[ -n "$mask" ] || mask=0x3f00
+	case "$mask" in
+		0x*|0X*) digits=${mask#??}; case "$digits" in ''|*[!0-9a-fA-F]*) return 1 ;; esac ;;
+		''|*[!0-9]*) return 1 ;;
+	esac
+	# Use the same bypass mark as mwan3 use, including a custom configured
+	# mask. The upstream socket wrapper accepts positive signed marks only.
+	ZBT_HEALTH_MARK=$(printf '%u' "$mask" 2>/dev/null) || return 1
+	[ "$ZBT_HEALTH_MARK" -gt 0 ] && [ "$ZBT_HEALTH_MARK" -le 2147483647 ]
+}
+zbt_health_exec() {
+	local family="$1" device="$2" address="$3"
+	shift 3
+	# Binding the device alone does not bypass mwan3's IPv6 OUTPUT policy. The
+	# backup's fwmark can reject this healthy primary's IPv6 probes, then cause
+	# a false outage on IPv6-only data paths. Use the shipped wrapper directly:
+	# unlike `mwan3 use`, this also works before netifd publishes the interface.
+	FAMILY="ipv$family" DEVICE="$device" SRCIP="$address" FWMARK="$ZBT_HEALTH_MARK" \
+		LD_PRELOAD="$ZBT_HEALTH_SOCKOPT" "$@"
+}
 zbt_health_probe() {
-	local section="$1" device index family target targets before after family_state code
+	local section="$1" device index family target targets before after family_state code address
 	ZBT_HEALTH4=absent; ZBT_HEALTH6=absent; ZBT_HEALTH=offline
 	ZBT_HEALTH_DEVICE=absent; ZBT_HEALTH_INDEX=0
 	zbt_modem_enabled "$section" || { ZBT_HEALTH=disabled; return 1; }
@@ -23,6 +48,13 @@ zbt_health_probe() {
 	for family in 4 6; do
 		before=$(ip -o -"$family" addr show dev "$device" scope global 2>/dev/null | awk '/ inet/ && !/ tentative| dadfailed/ {print $4}')
 		[ -n "$before" ] || continue
+		if ! zbt_health_socket_ready; then
+			ZBT_HEALTH=unknown
+			eval "ZBT_HEALTH$family=unknown"
+			logger -t modem-watchdog "slot=$section action=probe result=deferred reason=mwan-socket-binding-unavailable"
+			return 1
+		fi
+		address=${before%%/*}
 		eval "ZBT_HEALTH$family=offline"
 		if [ "$family" = 4 ]; then
 			targets="$(uci -q get modem_watchdog.global.ping_target) 8.8.8.8"
@@ -34,7 +66,7 @@ zbt_health_probe() {
 		for target in $targets; do
 			# Numeric destinations only: DNS and the peer WAN cannot satisfy this probe.
 			case "$target" in ''|*[!0-9a-fA-F:.]*) continue ;; esac
-			if ping -"$family" -I "$device" -c 1 -W 2 "$target" >/dev/null 2>&1; then
+			if zbt_health_exec "$family" "$device" "$address" ping -"$family" -I "$device" -c 1 -W 2 "$target" >/dev/null 2>&1; then
 				eval "ZBT_HEALTH$family=online"; break
 			fi
 		done
@@ -43,7 +75,7 @@ zbt_health_probe() {
 		# strict, device-bound 204 response as an independent fallback; a portal
 		# page or redirect is not Internet-health evidence.
 		if [ "$family_state" != online ] && command -v curl >/dev/null 2>&1; then
-			code=$(curl -"$family" -sS --noproxy '*' --interface "if!$device" \
+			code=$(zbt_health_exec "$family" "$device" "$address" curl -"$family" -sS --noproxy '*' --interface "if!$device" \
 				--connect-timeout 3 --max-time 6 -o /dev/null -w '%{http_code}' \
 				https://www.gstatic.com/generate_204 2>/dev/null) || code=''
 			[ "$code" != 204 ] || eval "ZBT_HEALTH$family=online"

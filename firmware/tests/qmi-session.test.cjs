@@ -28,7 +28,7 @@ function fixture(options = {}, body = 'zbt_qmi_session "$DB/child"; echo result=
   for (const [key, value] of Object.entries({ STATUS: 'offline', STARTED: '1', TIME: '100' }))
     fs.writeFileSync(path.join(dir, 'track/4_1', key), value);
   fs.writeFileSync(path.join(dir, 'clock'), '100');
-  fs.writeFileSync(path.join(dir, 'child'), '#!/bin/sh\nprintf "child=%s\\n" "$$" >> "$DB/calls"\nexec sleep 60\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(dir, 'child'), '#!/bin/sh\nprintf "child=%s\\n" "$$" >> "$DB/calls"\n[ -z "$CHILD_STATUS" ] || exit "$CHILD_STATUS"\nexec sleep 60\n', { mode: 0o755 });
   const script = dual + '\n' + helper.replaceAll('/var/run/mwan3track', dir + '/track') + `
 modem_config=4_1; modem_netcard=wwan8; interface_name=4_1; interface6_name=4_1v6
 MODEM_RUNDIR="$DB"; bridge_enabled=0; qmi_ifindex=17
@@ -87,7 +87,9 @@ sleep() {
 }
 test('QMI child failure cleans the selected slot, both families and stale PID, then returns to procd', () => {
   const f = fixture({ MODE: 'stuck' });
-  assert.match(f.out, /result=1/);
+  assert.match(f.out, /result=143\n/);
+  assert.match(f.calls, /reason=cm-exited cm_status=143 cm_pid=\d+/);
+  assert.ok(f.calls.indexOf('reason=cm-exited') < f.calls.indexOf('down 4_1\n'), 'exit cause is recorded before teardown');
   assert.doesNotMatch(f.calls, /data session failed for 120 seconds/);
   assert.ok(fs.existsSync(path.join(f.dir, 'watchdog/4_1.qmi-lost')));
   for (const family of [4, 6]) {
@@ -106,7 +108,7 @@ test('QMI connectivity recovery is delegated, never an address or stale tracker 
 test('QMI never tears down a live CM because netifd temporarily loses its route', () => {
   const f = fixture({ MODE: 'route_loss' });
   assert.doesNotMatch(f.calls, /kernel-data-path-lost/);
-  assert.match(f.out, /result=1/);
+  assert.match(f.out, /result=143\n/);
   assert.match(f.calls, /child=/);
   assert.ok(fs.existsSync(path.join(f.dir, 'watchdog/4_1.qmi-lost')));
   assert.doesNotMatch(f.calls, /wwan3|down 2_1|network restart/);
@@ -119,12 +121,26 @@ test('QMI interface reuse never flushes the new device after detach', () => {
   const f = fixture({ MODE: 'detach' });
   assert.equal(f.calls.split('ip -4 addr flush').length - 1, 1, 'only pre-dial flush, no flush after ifindex changes');
   assert.match(f.out, /result=1/);
+  assert.match(f.calls, /reason=usb-device-changed cm_status=pending.*device=wwan8 ifindex=17 current_device=wwan8 current_ifindex=99/);
+  assert.ok(f.calls.indexOf('reason=usb-device-changed') < f.calls.indexOf('down 4_1\n'));
 });
 test('QMI TERM stops the owned child, cleans once and does not start a replacement', () => {
   const f = fixture({ MODE: 'signal' });
   assert.equal(f.calls.split('down 4_1\n').length - 1, 1);
   assert.equal(fs.existsSync(path.join(f.dir, '4_1_dir/4_1.pid')), false);
   assert.doesNotMatch(f.out, /result=/, 'termination exits the parent');
+  assert.match(f.calls, /reason=signal-TERM cm_status=pending cm_pid=\d+/);
+  assert.equal(f.calls.split('action=cm-session-ending').length - 1, 1);
+  assert.ok(f.calls.indexOf('reason=signal-TERM') < f.calls.indexOf('down 4_1\n'));
+});
+test('QMI preserves a CM failure result and reports a normal exit as an ended persistent session', () => {
+  const failed = fixture({ CHILD_STATUS: '23' });
+  assert.match(failed.out, /result=23\n/);
+  assert.match(failed.calls, /reason=cm-exited cm_status=23/);
+  const clean = fixture({ CHILD_STATUS: '0' });
+  assert.match(clean.out, /result=1\n/);
+  assert.match(clean.calls, /reason=cm-exited cm_status=0/);
+  assert.doesNotMatch(failed.calls + clean.calls, /APN|password|IMSI|ICCID/);
 });
 test('QMI logical-interface cleanup rejects LAN aliases and foreign slot bindings', () => {
   const f = fixture({}, 'interface_name=lan; interface6_name=2_1; zbt_qmi_notify down');

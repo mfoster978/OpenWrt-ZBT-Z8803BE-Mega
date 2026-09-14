@@ -156,6 +156,31 @@ policy routing rules and recent recovery/failback events. It does not print
 wireless keys, APNs, modem account credentials or SIM IDs. Custom-rule origin is
 reported as unverified rather than falsely attributing it to the firmware.
 
+### September 14 recovery follow-up
+
+Actual BusyBox process tests reproduced a teardown race: a trapped TERM made
+the startup worker's `wait` return before the dialer completed cleanup. A new
+dial could then overlap the old dialer's removal of modem addresses/routes.
+The startup worker now retains its child PID and waits for the child to exit,
+including when another TERM arrives during cleanup. A per-slot inherited
+lifetime lock also prevents replacement while an old child is still cleaning
+up after procd forcibly kills the parent. A second real-process test verifies
+that this defers the same slot without blocking its peer.
+
+Health probes now use the pinned mwan3 socket wrapper with the physical device,
+source address and configured policy-bypass mark. Real Linux packet tests found
+that device binding alone allowed mwan3's backup/unreachable OUTPUT policy to
+reject the primary's **IPv6** probes. IPv4 device-bound probes already worked in
+those tests; this change is not evidence for the cause of the reported IPv4
+disconnect. Missing wrapper support defers recovery with a warning rather than
+counting an unknown result as a failed Internet probe.
+
+QMI lifecycle logs now distinguish child exit/status, a received signal and a
+changed USB netdev before cleanup. The diagnostic snapshot includes actual
+procd worker state, recovery counters and saved/current GPIO power values.
+These changes provide evidence for any remaining physical-router failure;
+they do not establish that the user's intermittent disconnect is cured.
+
 ## Validation and remaining physical checks
 
 Regression tests cover slot isolation, direct IPv4/IPv6 health, LED transitions,

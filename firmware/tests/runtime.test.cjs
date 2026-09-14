@@ -337,6 +337,104 @@ zbt_qmodem_start 4_1`, { ...f.env, STOPPED: stopped, DB: f.dir });
   assert.equal(out, 'launch:4_1\nlaunch:4_1');
 });
 
+test('stopping the real BusyBox dial worker waits for child teardown before replacement', () => {
+  const dir = sandbox();
+  fs.writeFileSync(path.join(dir, 'dialer'), `
+trap 'trap "" TERM; echo cleanup-start >> "$DB/events"; busybox sleep 0.3; echo cleanup-done >> "$DB/events"; exit 0' TERM
+echo child-ready >> "$DB/events"
+while :; do busybox sleep 0.02; done
+`);
+  const starter = qmodemStarter()
+    .replace('exec /usr/share/qmodem/modem_dial.sh', 'exec busybox sh "$DB/dialer"')
+    .replaceAll('/var/lock/', dir + '/') + `
+zbt_qmodem_armed() { return 0; }
+zbt_qmodem_ready() { return 0; }
+zbt_qmodem_recovery_busy() { return 1; }
+zbt_qmodem_launch_lock() { exec 8>"$DB/lock"; }
+zbt_qmodem_address_ready() { return 0; }
+flock() { [ "$1" != -u ] || echo launch-unlocked >> "$DB/events"; }
+logger() { :; }
+sleep() { busybox sleep 0.05; }
+zbt_qmodem_start 4_1
+`;
+  fs.writeFileSync(path.join(dir, 'starter'), starter);
+  const events = shell(`
+busybox sh "$DB/starter" & worker=$!
+tries=0
+while ! grep -q launch-unlocked "$DB/events" 2>/dev/null; do
+  [ "$tries" -lt 100 ] || exit 2
+  busybox sleep 0.02; tries=$((tries + 1))
+done
+busybox sleep 0.03
+kill -TERM "$worker"
+busybox sleep 0.05
+kill -TERM "$worker" 2>/dev/null || true
+wait "$worker"
+echo replacement-may-start >> "$DB/events"
+busybox sleep 0.4
+cat "$DB/events"
+`, { DB: dir });
+  assert.match(events, /child-ready\nlaunch-unlocked\ncleanup-start\ncleanup-done\nreplacement-may-start/,
+    'the old dialer must finish its delayed netifd/address cleanup before its parent is considered stopped');
+});
+
+test('a forcibly killed worker cannot overlap its still-cleaning dialer or block the peer slot', () => {
+  const dir = sandbox();
+  fs.writeFileSync(path.join(dir, 'dialer'), `
+${source('firmware/files/usr/lib/zbt/5g-state.sh')}
+config_section=$1; ZBT_5G_STATE="$DB/radio"
+zbt_5g_lock || exit 90
+zbt_5g_unlock || exit 91
+if [ "$GENERATION" != old ]; then echo "$GENERATION-start" >> "$DB/events"; exit 0; fi
+trap 'trap "" TERM; echo old-cleanup-start >> "$DB/events"; busybox sleep 1; echo old-cleanup-done >> "$DB/events"; exit 0' TERM
+echo old-ready >> "$DB/events"
+while :; do busybox sleep 0.02; done
+`);
+  const starter = qmodemStarter()
+    .replace('exec /usr/share/qmodem/modem_dial.sh', 'exec busybox sh "$DB/dialer"')
+    .replaceAll('/var/lock/', dir + '/') + `
+zbt_qmodem_address_ready() { return 0; }
+flock() {
+  command flock "$@" || return $?
+  [ "$*" != '-u 8' ] || echo launch-unlocked >> "$DB/events"
+}
+logger() { :; }
+sleep() { busybox sleep 0.01; }
+zbt_qmodem_child=''; zbt_qmodem_stopping=0
+trap 'zbt_qmodem_stop' TERM
+zbt_qmodem_launch "$1"
+`;
+  fs.writeFileSync(path.join(dir, 'starter'), starter);
+  const events = shell(`
+wait_event() {
+  local tries=0
+  while ! grep -q "$1" "$DB/events" 2>/dev/null; do
+    [ "$tries" -lt 150 ] || exit 2
+    busybox sleep 0.02; tries=$((tries + 1))
+  done
+}
+GENERATION=old busybox sh "$DB/starter" 4_1 & worker=$!
+wait_event launch-unlocked
+kill -TERM "$worker"
+wait_event old-cleanup-start
+kill -KILL "$worker"
+wait "$worker" 2>/dev/null || true
+echo old-parent-killed >> "$DB/events"
+result=0
+GENERATION=replacement busybox sh "$DB/starter" 4_1 || result=$?
+echo "replacement-result=$result" >> "$DB/events"
+GENERATION=peer busybox sh "$DB/starter" 2_1
+wait_event old-cleanup-done
+GENERATION=replacement busybox sh "$DB/starter" 4_1
+cat "$DB/events"
+`, { DB: dir });
+  assert.match(events, /old-parent-killed\nreplacement-result=75\npeer-start/,
+    'the still-owned primary slot must reject replacement while the independent peer can launch');
+  assert.ok(events.indexOf('peer-start') < events.indexOf('old-cleanup-done'), events);
+  assert.ok(events.indexOf('old-cleanup-done') < events.indexOf('replacement-start'), events);
+  assert.equal(events.split('replacement-start').length - 1, 1, 'only the attempt after old cleanup may dial');
+});
+
 test('boot readiness worker rejects the peer AT port and exits if enable_dial is cleared', () => {
   const f = usbFixture(), stopped = path.join(f.dir, 'disabled');
   const out = shell(qmodemStarter() + `

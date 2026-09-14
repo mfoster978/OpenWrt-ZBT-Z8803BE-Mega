@@ -37,6 +37,7 @@ test -x firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v2
 test -x firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v3
 test -x firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v4
 test -x firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v5
+test -x firmware/files/usr/libexec/rpcd/zbt.wifi
 test -x firmware/files/etc/uci-defaults/99-zbt-5g-adaptive-v2
 grep -Fq 'redial_attempts=1' firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v2
 grep -Fq '/etc/init.d/modem_watchdog restart' firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v3

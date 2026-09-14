@@ -3,6 +3,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
+const { spawnSync } = require('node:child_process');
 
 function fixture() {
   const source = fs.readFileSync(path.join(__dirname, '../files/www/luci-static/resources/view/network/quick-wifi.js'), 'utf8');
@@ -35,15 +37,21 @@ function fixture() {
     },
     set(config, section, option, value) {
       assert.equal(config, 'wireless');
-      const row = ifaces.find(item => item['.name'] === section);
+      const row = devices.concat(ifaces).find(item => item['.name'] === section);
       assert.ok(row, `unknown interface ${section}`);
       row[option] = value;
+    },
+    unset(config, section, option) {
+      assert.equal(config, 'wireless');
+      const row = devices.concat(ifaces).find(item => item['.name'] === section);
+      assert.ok(row, `unknown section ${section}`);
+      delete row[option];
     },
     save() { saves++; return Promise.resolve(); }
   };
   const ui = { changes: { apply() { applies++; return Promise.resolve(); } } };
   const api = new Function('uci', 'ui', 'TextEncoder', source.slice(0, boundary) +
-    '\nreturn { quickWifiTargets, validateQuickWifi, applyQuickWifi };')(uci, ui, TextEncoder);
+    '\nreturn { quickWifiTargets, validateQuickWifi, applyQuickWifi, cameraCompatibilityTarget, applyCameraCompatibility };')(uci, ui, TextEncoder);
   return { api, devices, ifaces, counters: () => ({ saves, applies }) };
 }
 
@@ -105,4 +113,114 @@ test('Quick Wi-Fi menu and ACL stay scoped to wireless configuration', () => {
   assert.equal(menu['admin/network/quick-wifi'].action.path, 'network/quick-wifi');
   assert.deepEqual(acl['zbt-quick-wifi'].write.uci, [ 'wireless' ]);
   assert.deepEqual(Object.keys(acl['zbt-quick-wifi'].write.file), [ '/sbin/wifi' ]);
+  assert.deepEqual(acl['zbt-quick-wifi'].read.ubus['zbt.wifi'], [ 'diagnostics' ]);
+});
+
+test('camera compatibility repairs preserved settings without changing credentials or other bands', async () => {
+  const { api, devices, ifaces, counters } = fixture();
+  const ap = ifaces.find(row => row['.name'] === 'default_radioA');
+  const radio = devices[0];
+  Object.assign(radio, { htmode: 'EHT40', legacy_rates: '0', cell_density: '3', basic_rate: ['24000'], require_mode: 'n' });
+  Object.assign(ap, { encryption: 'sae', ieee80211w: '2', ieee80211r: '1', basic_rate: ['24000'] });
+  const otherIfaces = JSON.stringify(ifaces.filter(row => row !== ap));
+  const otherRadios = JSON.stringify(devices.slice(1));
+  await api.applyCameraCompatibility(api.quickWifiTargets());
+  assert.equal(ap.ssid, 'Old-2G');
+  assert.equal(ap.key, 'old-password');
+  assert.equal(ap.encryption, 'psk2+ccmp');
+  assert.equal(ap.ieee80211w, '0');
+  assert.equal(ap.ieee80211r, '0');
+  assert.equal(ap.wmm, '1');
+  assert.equal(radio.htmode, 'HT20');
+  assert.equal(radio.legacy_rates, '1');
+  assert.equal(radio.cell_density, '0');
+  assert.equal(radio.require_mode, undefined);
+  assert.equal(radio.basic_rate, undefined);
+  assert.equal(ap.basic_rate, undefined);
+  assert.equal(JSON.stringify(ifaces.filter(row => row !== ap)), otherIfaces);
+  assert.equal(JSON.stringify(devices.slice(1)), otherRadios);
+  assert.deepEqual(counters(), { saves: 1, applies: 1 });
+});
+
+test('camera compatibility refuses shared MLO and invalid keys before any writes', async () => {
+  const { api, ifaces, devices, counters } = fixture();
+  const ap = ifaces.find(row => row['.name'] === 'default_radioA');
+  ap.device = ['radioA', 'radioB', 'radioC'];
+  ap.mlo = '1';
+  const before = JSON.stringify([devices, ifaces]);
+  await assert.rejects(api.applyCameraCompatibility(api.quickWifiTargets()), /separate 2.4 GHz/);
+  assert.equal(JSON.stringify([devices, ifaces]), before);
+  ap.device = 'radioA';
+  delete ap.mlo;
+  delete ap.key;
+  const noKey = JSON.stringify([devices, ifaces]);
+  await assert.rejects(api.applyCameraCompatibility(api.quickWifiTargets()), /valid password/);
+  assert.equal(JSON.stringify([devices, ifaces]), noKey);
+  assert.deepEqual(counters(), { saves: 0, applies: 0 });
+});
+
+test('camera compatibility rejects a selected AP outside LAN without changing Quick Wi-Fi selection', async () => {
+  const { api, ifaces, devices, counters } = fixture();
+  const ap = ifaces.find(row => row['.name'] === 'default_radioA');
+  ap.network = 'camera_vlan';
+  const targets = api.quickWifiTargets();
+  assert.equal(targets.byBand['2g'], ap['.name']);
+  const before = JSON.stringify([devices, ifaces]);
+  await assert.rejects(api.applyCameraCompatibility(targets), /separate 2.4 GHz/);
+  assert.equal(JSON.stringify([devices, ifaces]), before);
+  assert.deepEqual(counters(), { saves: 0, applies: 0 });
+});
+
+test('Wi-Fi report distinguishes authentication from IP assignment and excludes credentials', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mega-wifi-report-'));
+  try {
+    const leasefile = path.join(dir, 'leases');
+    fs.writeFileSync(leasefile, '0 aa:bb:cc:dd:ee:01 192.168.1.120 dvr *\n1 aa:bb:cc:dd:ee:02 192.168.1.121 expired *\n');
+    const source = fs.readFileSync(path.join(__dirname, '../files/usr/libexec/rpcd/zbt.wifi'), 'utf8');
+    const mocks = `
+uci() {
+ case "$*" in
+  '-q get wireless.radio0.band') echo 2g ;;
+  '-q get wireless.radio1.band') echo 5g ;;
+  '-q get dhcp.@dnsmasq[0].leasefile') echo "$LEASEFILE" ;;
+  *) echo UNEXPECTED_UCI >&2; return 1 ;;
+ esac
+}
+ubus() {
+ case "$*" in
+  '-t 3 call network.wireless status')
+   printf '%s' '{"radio0":{"interfaces":[{"ifname":"phy0-ap0","config":{"mode":"ap","ssid":"Truck","key":"NEVER-EXPORT-KEY"}}]},"radio1":{"interfaces":[{"ifname":"phy1-ap0","config":{"mode":"ap","ssid":"Other"}}]}}' ;;
+  '-t 3 call hostapd.phy0-ap0 get_clients')
+   [ "$FAIL_CLIENTS" != 1 ] || return 1
+   printf '%s' '{"clients":{"AA:BB:CC:DD:EE:01":{"assoc":true,"authorized":true},"aa:bb:cc:dd:ee:02":{"assoc":true,"authorized":false},"aa:bb:cc:dd:ee:03":{"assoc":true,"authorized":true}}}' ;;
+  *) echo UNEXPECTED_UBUS >&2; return 1 ;;
+ esac
+}
+logread() {
+ printf '%s\\n' 'hostapd: phy0-ap0: AP-STA-CONNECTED aa:bb:cc:dd:ee:01' 'hostapd: WPA: key NEVER-EXPORT-LOG-KEY' 'unrelated: account NEVER-EXPORT-ACCOUNT' 'hostapd: arbitrary NEVER-EXPORT-SECRET AP-STA-CONNECTED' 'hostapd: STA aa:bb:cc:dd:ee:02 IEEE 802.11: associated (aid 2)' 'hostapd: AP-STA-CONNECTED invalid-MAC NEVER-EXPORT-SECRET'
+}
+`;
+    const run = (env = {}) => spawnSync('busybox', ['sh', '-c', mocks + source, 'wifi-report', 'call', 'diagnostics'],
+      { input: '{}\n', encoding: 'utf8', env: { ...process.env, LEASEFILE: leasefile, ...env }, timeout: 10000 });
+    const result = run();
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, '');
+    assert.doesNotMatch(result.stdout, /NEVER-EXPORT|Other/);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.ok, true);
+    assert.equal(report.access_points.length, 1);
+    const clients = report.access_points[0].clients;
+    assert.equal(clients[0].authorized, true);
+    assert.deepEqual(clients[0].addresses, ['192.168.1.120']);
+    assert.equal(clients[1].associated, true);
+    assert.equal(clients[1].authorized, false);
+    assert.deepEqual(clients[1].addresses, []);
+    assert.equal(clients[2].authorized, true);
+    assert.deepEqual(clients[2].addresses, []);
+    assert.deepEqual(report.events, ['AP-STA-CONNECTED aa:bb:cc:dd:ee:01', 'associated aa:bb:cc:dd:ee:02']);
+    const missing = run({ FAIL_CLIENTS: '1' });
+    assert.equal(missing.status, 0, missing.stderr);
+    assert.equal(JSON.parse(missing.stdout).access_points[0].available, false);
+    assert.deepEqual(JSON.parse(missing.stdout).access_points[0].clients, []);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

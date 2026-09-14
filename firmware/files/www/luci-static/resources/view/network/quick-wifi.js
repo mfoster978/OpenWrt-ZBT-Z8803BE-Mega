@@ -2,6 +2,7 @@
 'require view';
 'require uci';
 'require ui';
+'require rpc';
 
 var BAND_ORDER = [ '2g', '5g', '6g' ];
 var BAND_LABEL = { '2g': '2.4 GHz', '5g': '5 GHz', '6g': '6 GHz' };
@@ -106,6 +107,74 @@ function applyQuickWifi(targets, ssid, password) {
 	return uci.save().then(function() { return ui.changes.apply(); });
 }
 
+function cameraCompatibilityTarget(targets) {
+	var radio = targets.radios['2g'];
+	var section = targets.byBand['2g'];
+	if (!radio || !section)
+		return null;
+	var devices = asList(uci.get('wireless', section, 'device'));
+	var networks = asList(uci.get('wireless', section, 'network'));
+	var mlo = uci.get('wireless', section, 'mlo');
+	var key = uci.get('wireless', section, 'key') || '';
+	var encryption = uci.get('wireless', section, 'encryption') || '';
+	if (devices.length !== 1 || networks.indexOf('lan') === -1 || mlo === '1' || mlo === 1 || mlo === true ||
+		!/^(psk|psk2|psk-mixed|sae|sae-mixed)(\+.*)?$/.test(encryption) ||
+		!((utf8Length(key) >= 8 && utf8Length(key) <= 63 && !/[\r\n\0]/.test(key)) || /^[a-fA-F0-9]{64}$/.test(key)))
+		return null;
+	return { radio: radio, section: section };
+}
+
+function applyCameraCompatibility(targets) {
+	var target = cameraCompatibilityTarget(targets);
+	if (!target)
+		return Promise.reject(new Error('A separate 2.4 GHz access point with a valid password is required.'));
+	uci.set('wireless', target.radio, 'htmode', 'HT20');
+	uci.set('wireless', target.radio, 'legacy_rates', '1');
+	uci.set('wireless', target.radio, 'cell_density', '0');
+	uci.unset('wireless', target.radio, 'basic_rate');
+	uci.unset('wireless', target.radio, 'supported_rates');
+	uci.unset('wireless', target.radio, 'require_mode');
+	uci.unset('wireless', target.section, 'basic_rate');
+	uci.unset('wireless', target.section, 'supported_rates');
+	uci.set('wireless', target.section, 'encryption', 'psk2+ccmp');
+	uci.set('wireless', target.section, 'ieee80211w', '0');
+	uci.set('wireless', target.section, 'ieee80211r', '0');
+	uci.set('wireless', target.section, 'ocv', '0');
+	uci.set('wireless', target.section, 'beacon_prot', '0');
+	uci.set('wireless', target.section, 'wmm', '1');
+	return uci.save().then(function() { return ui.changes.apply(); });
+}
+
+function cameraClientStage(client) {
+	if (client.authorized === true)
+		return client.addresses && client.addresses.length ? _('Wi-Fi connected; DHCP address assigned') : _('Wi-Fi connected; no DHCP lease found');
+	if (client.associated === true)
+		return _('Associated; authentication not complete');
+	return _('Authentication not complete');
+}
+
+function cameraDiagnosticsView(report) {
+	if (!report || report.ok !== true)
+		return E('p', {}, _('Wi-Fi diagnostics are unavailable.'));
+	var rows = [];
+	(report.access_points || []).forEach(function(ap) {
+		rows.push(E('p', {}, '%s: %s'.format(ap.ssid || ap.iface,
+			ap.available ? _('Access point running') : _('Access point status unavailable'))));
+		(ap.clients || []).forEach(function(client) {
+			rows.push(E('p', {}, '%s — %s%s'.format(client.mac, cameraClientStage(client),
+				client.addresses && client.addresses.length ? ' (' + client.addresses.join(', ') + ')' : '')));
+		});
+	});
+	if (!(report.access_points || []).some(function(ap) { return (ap.clients || []).length > 0; }))
+		rows.push(E('p', {}, _('No 2.4 GHz clients are associated right now. Retry the DVR connection, then refresh this report.')));
+	rows.push(E('p', {}, _('Match the DVR’s Wi-Fi MAC address with the entries above. A DHCP lease can remain after a device disconnects, and devices using a static address may have no DHCP lease. Wi-Fi authentication does not prove Internet access.')));
+	if (report.events && report.events.length) {
+		rows.push(E('h4', {}, _('Recent Wi-Fi connection events')));
+		rows.push(E('pre', { 'style': 'white-space:pre-wrap;overflow-wrap:anywhere' }, report.events.join('\n')));
+	}
+	return E('div', {}, rows);
+}
+
 return view.extend({
 	load: function() {
 		return uci.load('wireless');
@@ -113,6 +182,42 @@ return view.extend({
 
 	render: function() {
 		var targets = quickWifiTargets();
+		var cameraTarget = cameraCompatibilityTarget(targets);
+		var diagnostics = E('div', { 'aria-live': 'polite' });
+		var callDiagnostics = rpc.declare({ object: 'zbt.wifi', method: 'diagnostics', expect: {} });
+		var cameraButton = E('button', {
+			'class': 'btn cbi-button cbi-button-action',
+			'disabled': cameraTarget ? null : 'disabled',
+			'click': function() {
+				ui.showModal(_('Apply 2.4 GHz Camera Compatibility?'), [
+					E('p', {}, _('The primary 2.4 GHz network will use WPA2-AES, 20 MHz 802.11n, and legacy rates, with protected management frames and fast roaming disabled. Its network name and password stay the same. Wi-Fi will reconnect briefly.')),
+					E('p', {}, _('The 20 MHz radio mode and rates also apply to other networks sharing the 2.4 GHz radio. Their security, names, and passwords stay the same.')),
+					E('div', { 'class': 'right' }, [
+						E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')), ' ',
+						E('button', { 'class': 'btn cbi-button cbi-button-positive', 'click': function() {
+							ui.hideModal();
+							cameraButton.disabled = true;
+							return applyCameraCompatibility(targets).then(function() {
+								ui.addNotification(null, E('p', {}, _('Camera compatibility applied. Reconnect the DVR using its existing Wi-Fi name and password.')), 'info');
+							}).catch(function(error) {
+								ui.addNotification(null, E('p', {}, error.message || String(error)), 'danger');
+							}).finally(function() { cameraButton.disabled = false; });
+						} }, _('Apply Compatibility'))
+					])
+				]);
+			}
+		}, _('Apply 2.4 GHz Camera Compatibility'));
+		var diagnosticsButton = E('button', {
+			'class': 'btn cbi-button',
+			'click': function() {
+				diagnosticsButton.disabled = true;
+				return callDiagnostics().then(function(report) {
+					diagnostics.replaceChildren(cameraDiagnosticsView(report));
+				}).catch(function(error) {
+					diagnostics.replaceChildren(E('p', {}, _('Unable to read Wi-Fi diagnostics: %s').format(error.message || String(error))));
+				}).finally(function() { diagnosticsButton.disabled = false; });
+			}
+		}, _('Refresh Wi-Fi Connection Report'));
 		var currentNames = [];
 		targets.sections.forEach(function(section) {
 			var name = uci.get('wireless', section, 'ssid') || '';
@@ -209,7 +314,17 @@ return view.extend({
 					])
 				])
 			]),
-			E('div', { 'class': 'cbi-page-actions' }, [ applyButton ])
+			E('div', { 'class': 'cbi-page-actions' }, [ applyButton ]),
+			E('div', { 'class': 'cbi-section' }, [
+				E('h3', {}, _('Camera / DVR Connection')),
+				E('p', {}, _('Keeping settings during an upgrade also keeps your previous Wi-Fi security and radio mode. Apply this profile to update the existing 2.4 GHz network for older cameras.')),
+				cameraTarget ? E('p', {}, _('Current 2.4 GHz settings: %s, security %s, protected management frames %s.').format(
+					uci.get('wireless', cameraTarget.radio, 'htmode') || _('default'),
+					uci.get('wireless', cameraTarget.section, 'encryption') || _('default'),
+					uci.get('wireless', cameraTarget.section, 'ieee80211w') || _('automatic'))) :
+					E('p', {}, _('This profile requires a separate 2.4 GHz network with a valid Wi-Fi password. Shared Wi-Fi 7 MLO networks must be separated in Network → Wi-Fi 7 MLO first.')),
+				cameraButton, ' ', diagnosticsButton, diagnostics
+			])
 		]);
 	},
 

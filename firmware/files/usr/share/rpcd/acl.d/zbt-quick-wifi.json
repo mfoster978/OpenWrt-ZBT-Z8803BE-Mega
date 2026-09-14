@@ -3,7 +3,8 @@
 		"description": "Allow the Mega quick Wi-Fi setup page to update wireless names and passwords",
 		"read": {
 			"ubus": {
-				"network.wireless": [ "status" ]
+				"network.wireless": [ "status" ],
+				"zbt.wifi": [ "diagnostics" ]
 			},
 			"uci": [ "wireless" ]
 		},
