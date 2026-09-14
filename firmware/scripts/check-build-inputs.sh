@@ -338,7 +338,8 @@ for component in \
   firmware/files/www/luci-static/resources/view/zbt8803be/mega-about-v2.css \
   firmware/files/www/luci-static/resources/zbt-mega-mobile.css \
   firmware/files/www/luci-static/resources/view/system/mega-update.js \
-  firmware/files/www/luci-static/resources/view/system/mega-update.css; do
+  firmware/files/www/luci-static/resources/view/system/mega-update.css \
+  firmware/files/www/luci-static/resources/view/network/quick-wifi.js; do
   test -s "$component" || { echo "Missing Mega component: $component" >&2; exit 1; }
 done
 test -x firmware/files/usr/libexec/rpcd/zbt.firmware
@@ -346,14 +347,19 @@ for metadata in \
   firmware/files/usr/share/luci/menu.d/luci-app-zbt-about.json \
   firmware/files/usr/share/luci/menu.d/zbt-firmware.json \
   firmware/files/usr/share/luci/menu.d/zbt-speedify-launcher.json \
+  firmware/files/usr/share/luci/menu.d/zbt-quick-wifi.json \
   firmware/files/usr/share/rpcd/acl.d/luci-app-speedify.json \
   firmware/files/usr/share/rpcd/acl.d/zbt-firmware.json \
+  firmware/files/usr/share/rpcd/acl.d/zbt-quick-wifi.json \
   firmware/files/usr/share/rpcd/acl.d/luci-app-zbt-about.json; do
   python3 -m json.tool "$metadata" >/dev/null
 done
 grep -Fq '"path": "zbt8803be/mega-about-v2"' firmware/files/usr/share/luci/menu.d/luci-app-zbt-about.json
 grep -Fq '"path": "speedify/launcher"' firmware/files/usr/share/luci/menu.d/zbt-speedify-launcher.json
 grep -Fq '"path": "speedify/speedify"' firmware/files/usr/share/luci/menu.d/zbt-speedify-launcher.json
+grep -Fq '"path": "network/quick-wifi"' firmware/files/usr/share/luci/menu.d/zbt-quick-wifi.json
+grep -Fq "applyQuickWifi(targets, ssid, password)" firmware/files/www/luci-static/resources/view/network/quick-wifi.js
+grep -Fq "ui.changes.apply()" firmware/files/www/luci-static/resources/view/network/quick-wifi.js
 grep -Fq "target.protocol = 'https:'" firmware/files/www/luci-static/resources/view/speedify/launcher.js
 grep -Fq 'window.location.replace(target.href)' firmware/files/www/luci-static/resources/view/speedify/launcher.js
 grep -Fq "install_luci_wrapper || return 1" firmware/files/usr/sbin/speedify-installer-loop

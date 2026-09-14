@@ -1,0 +1,14 @@
+{
+	"admin/network/quick-wifi": {
+		"title": "Quick Wi-Fi Setup",
+		"order": 15,
+		"action": {
+			"type": "view",
+			"path": "network/quick-wifi"
+		},
+		"depends": {
+			"acl": [ "zbt-quick-wifi" ],
+			"uci": { "wireless": true }
+		}
+	}
+}

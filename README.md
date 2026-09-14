@@ -113,6 +113,8 @@ Installed does not mean every feature is actively controlling traffic. Keep unus
 - Device-specific ZBT-Z8803BE support from the pinned Far5eer release.
 - MediaTek Filogic 880 platform with MT7996-family tri-band Wi-Fi 7 support.
 - 2.4 GHz, 5 GHz, and 6 GHz operation, including the upstream opt-in Wi-Fi 7 MLO interface.
+- The factory 2.4 GHz SSID uses WPA2-CCMP, PMF off, and HT20 for older cameras and embedded clients; 5 GHz and 6 GHz retain WPA3-SAE defaults.
+- **Network → Quick Wi-Fi Setup** applies one network name and password to the primary 2.4 GHz, 5 GHz, and 6 GHz access points without changing their per-band security or advanced radio settings.
 - The pinned hostapd receives focused upstream AP-MLD interoperability fixes: correct partner-profile length accounting, per-link BSS change counters, valid EML capability fields, clean reassociation state, and reliable MLD reload/interface reuse. It also records key-free requested/accepted link bitmaps in `logread` so single-link negotiation can be distinguished from a link lost later in the stack.
 - 10 Gb/s SFP+ (`10gbase-r`, in-band status), copper Ethernet, USB 3.0, ext4, vfat, exfat, block mounting, and SFTP support inherited from the baseline.
 - ZBT temperature charts, health monitoring, fan information, modem LED services, event history, and device-specific LuCI styling inherited from the baseline.

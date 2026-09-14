@@ -1,0 +1,17 @@
+{
+	"zbt-quick-wifi": {
+		"description": "Allow the Mega quick Wi-Fi setup page to update wireless names and passwords",
+		"read": {
+			"ubus": {
+				"network.wireless": [ "status" ]
+			},
+			"uci": [ "wireless" ]
+		},
+		"write": {
+			"file": {
+				"/sbin/wifi": [ "exec" ]
+			},
+			"uci": [ "wireless" ]
+		}
+	}
+}

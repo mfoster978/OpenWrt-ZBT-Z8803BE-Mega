@@ -34,6 +34,16 @@ uci() {
   assert.equal(preserved.stdout, '', 'preserved custom SSID causes no generation, write or reload');
   assert.equal(fs.readFileSync(path.join(fixtures, 'wireless'), 'utf8'), 'preserved custom configuration');
   assert.doesNotMatch(script.replace(/^#.*$/gm, ''), /wifi detect|wifi reload|sleep 5/);
+  assert.match(script, /2g\) ssid="WIFI7-\$\{mac6\}"; encryption=psk2; pmf=0/,
+    'factory 2.4 GHz AP uses WPA2-CCMP with protected management frames disabled');
+  assert.match(script, /5g\) ssid="WIFI7-5G-\$\{mac6\}"; encryption=sae; pmf=2/,
+    'factory 5 GHz AP retains WPA3-SAE and required PMF');
+  assert.match(script, /6g\) ssid="WIFI7-6G-\$\{mac6\}"; encryption=sae; pmf=2/,
+    'factory 6 GHz AP retains WPA3-SAE and required PMF');
+  assert.match(script, /2g\).*htmode=HT20/,
+    'factory 2.4 GHz radio uses 20 MHz 802.11n compatibility mode');
+  assert.doesNotMatch(script.replace(/^#.*$/gm, ''), /2g\).*htmode=EHT/,
+    'factory 2.4 GHz radio must not require an EHT-capable client');
   const late = fs.readFileSync(path.join(root, 'firmware/files/usr/sbin/zbt-wifi-firstboot'), 'utf8');
   assert.match(late, /ubus -t 2 list network\.wireless/);
   assert.match(late, /configured-ap-not-running phase=boot/);
