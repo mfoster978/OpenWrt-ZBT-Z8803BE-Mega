@@ -1,0 +1,83 @@
+#!/bin/sh
+# Harden the route-recovery helper installed by the previous image. A cached
+# gateway belongs to one exact supervised CM process, not merely an ifindex/IP
+# pair, and recovery must add its route without replacing a backup WAN route.
+set -eu
+file=/usr/lib/zbt/qmi-publish.sh
+[ -f "$file" ] || exit 0
+
+if grep -Fq 'exact supervised CM process' "$file" &&
+   grep -Fq 'ip -4 route add default via "$gateway"' "$file"; then
+	exit 0
+fi
+
+[ "$(grep -Fc 'zbt_qmi_route_cache_file() {' "$file" || true)" = 1 ] || exit 1
+[ "$(grep -Fc 'zbt_qmi_published() {' "$file" || true)" = 1 ] || exit 1
+
+tmp="$file.zbt.$$"
+awk '
+	BEGIN { replacing=0 }
+	/^zbt_qmi_route_cache_file\(\) \{/ {
+		print "zbt_qmi_route_cache_file() {"
+		print "\tprintf '\''%s/%s_dir/ipv4-main-route\\n'\'' \"${MODEM_RUNDIR:-/var/run/qmodem}\" \"$1\""
+		print "}"
+		print ""
+		print "zbt_qmi_cache_ipv4_route() {"
+		print "\tlocal modem_config=\"$1\" modem_netcard=\"$2\" qmi_ifindex=\"$3\" route address gateway metric file tmp pid"
+		print "\t[ -n \"$qmi_ifindex\" ] || return 1"
+		print "\tread -r pid 2>/dev/null < \"${MODEM_RUNDIR:-/var/run/qmodem}/${modem_config}_dir/$modem_config.pid\" || return 1"
+		print "\tcase \"$pid\" in '\'''\''|*[!0-9]*|0|1) return 1 ;; esac"
+		print "\tkill -0 \"$pid\" 2>/dev/null || return 1"
+		print "\taddress=$(ip -o -4 addr show dev \"$modem_netcard\" scope global 2>/dev/null |"
+		print "\t\tawk '\''/ inet/ && !/ tentative| dadfailed/ {print $4; exit}'\'')"
+		print "\t[ -n \"$address\" ] || return 1"
+		print "\troute=$(ip -4 route show table main default dev \"$modem_netcard\" 2>/dev/null | sed -n '\''1p'\'')"
+		print "\t[ -n \"$route\" ] || return 1"
+		print "\tgateway=$(printf '\''%s\\n'\'' \"$route\" | awk '\''{for(i=1;i<=NF;i++) if($i==\"via\") {print $(i+1); exit}}'\'')"
+		print "\tmetric=$(printf '\''%s\\n'\'' \"$route\" | awk '\''{for(i=1;i<=NF;i++) if($i==\"metric\") {print $(i+1); exit}}'\'')"
+		print "\t[ -n \"$gateway\" ] || return 1"
+		print "\tcase \"$metric\" in '\'''\''|*[!0-9]*) metric=$(uci -q get \"network.$modem_config.metric\") ;; esac"
+		print "\tcase \"$metric\" in '\'''\''|*[!0-9]*) metric=200; [ \"$modem_config\" != 2_1 ] || metric=210 ;; esac"
+		print "\tfile=$(zbt_qmi_route_cache_file \"$modem_config\")"
+		print "\tmkdir -p \"${file%/*}\" || return 1"
+		print "\ttmp=\"$file.$$\""
+		print "\tprintf '\''%s %s %s %s %s\\n'\'' \"$pid\" \"$qmi_ifindex\" \"$address\" \"$gateway\" \"$metric\" > \"$tmp\" || { rm -f \"$tmp\"; return 1; }"
+		print "\tmv -f \"$tmp\" \"$file\""
+		print "}"
+		print ""
+		print "# Repair only a route observed on this exact supervised CM process. PID,"
+		print "# ifindex and address must all still match. Add, never replace, so recovery"
+		print "# cannot overwrite a healthy backup WAN default route."
+		print "zbt_qmi_restore_ipv4_route() {"
+		print "\tlocal modem_config=\"$1\" modem_netcard=\"$2\" qmi_ifindex=\"$3\" file cached_pid cached_index cached_address gateway metric current current_pid"
+		print "\t[ -z \"$(ip -4 route show table main default dev \"$modem_netcard\" 2>/dev/null)\" ] || return 0"
+		print "\tfile=$(zbt_qmi_route_cache_file \"$modem_config\")"
+		print "\tread -r cached_pid cached_index cached_address gateway metric 2>/dev/null < \"$file\" || return 1"
+		print "\tcase \"$cached_pid:$cached_index:$metric\" in *[!0-9:]*|:*|*:) return 1 ;; esac"
+		print "\tread -r current_pid 2>/dev/null < \"${MODEM_RUNDIR:-/var/run/qmodem}/${modem_config}_dir/$modem_config.pid\" || return 1"
+		print "\t[ \"$current_pid\" = \"$cached_pid\" ] || return 1"
+		print "\tkill -0 \"$current_pid\" 2>/dev/null || return 1"
+		print "\t[ \"$cached_index\" = \"$qmi_ifindex\" ] || return 1"
+		print "\tcurrent=$(ip -o -4 addr show dev \"$modem_netcard\" scope global 2>/dev/null |"
+		print "\t\tawk '\''/ inet/ && !/ tentative| dadfailed/ {print $4; exit}'\'')"
+		print "\t[ -n \"$current\" ] && [ \"$current\" = \"$cached_address\" ] || return 1"
+		print "\tip -4 route add default via \"$gateway\" dev \"$modem_netcard\" metric \"$metric\" || return 1"
+		print "\t[ -n \"$(ip -4 route show table main default dev \"$modem_netcard\" 2>/dev/null)\" ] || return 1"
+		print "\tlogger -t zbt-mwan-reconcile \"iface=$modem_config family=4 device=$modem_netcard action=restore_cm_main_route gateway=$gateway metric=$metric result=verified\""
+		print "}"
+		print ""
+		replacing=1
+		next
+	}
+	replacing && /^zbt_qmi_published\(\) \{/ { replacing=0; print; next }
+	replacing { next }
+	{ print }
+' "$file" > "$tmp"
+
+[ "$(grep -Fc 'exact supervised CM process' "$tmp" || true)" = 1 ] || { rm -f "$tmp"; exit 1; }
+[ "$(grep -Fc 'ip -4 route add default via "$gateway"' "$tmp" || true)" = 1 ] || { rm -f "$tmp"; exit 1; }
+[ "$(grep -Fc 'ip -4 route replace default via "$gateway"' "$tmp" || true)" = 0 ] || { rm -f "$tmp"; exit 1; }
+
+mv -f "$tmp" "$file"
+logger -t zbt-mwan-reconcile 'installed PID-bound, non-replacing QMI route recovery'
+exit 0
