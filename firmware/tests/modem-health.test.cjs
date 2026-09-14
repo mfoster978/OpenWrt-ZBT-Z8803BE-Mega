@@ -131,9 +131,9 @@ function assertPowerCycleSequence(calls, section, waitSeconds=0) {
     `service dial ${section}`].join('\n');
   assert.ok(calls.includes(expected),`ordered teardown/low pulse/high/restart sequence missing:\n${calls}`);
 }
-test('each daemon recreates its missing enabled dial worker after exhausting destructive recovery budget',()=>{
+test('each daemon recreates its missing enabled dial worker without consuming recovery ladder state',()=>{
   for (const section of ['4_1','2_1']) {
-    const f=fixture(`printf '3 0 100 3 0 3 0 17\\n' > "$DB/recovery/${section}.state"
+    const f=fixture(`printf '0 0 100 3 0 3 0 17\\n' > "$DB/recovery/${section}.state"
 sleep() { [ "$1" != 20 ] || exit 0; }
 watch_slot ${section}`);
     assert.equal((f.calls.match(/service dial /g)||[]).length,1);
@@ -142,7 +142,7 @@ watch_slot ${section}`);
     assert.doesNotMatch(f.calls,/service hang |sleep [0-9]+ power=(?:0\/|1\/0)|requesting /);
     assert.ok(fs.existsSync(path.join(f.d,`worker-${section}`)));
     const state=fs.readFileSync(path.join(f.d,`recovery/${section}.state`),'utf8').trim().split(' ');
-    assert.equal(state[5],'3','registration must not consume/reset GPIO recovery budget');
+    assert.equal(state[5],'3','registration must not consume/reset recovery action count');
   }
 });
 test('dial-worker repair leaves live or administratively disabled slots alone',()=>{
@@ -220,7 +220,7 @@ test('missing socket wrapper or invalid bypass mark cannot be counted as a modem
     assert.doesNotMatch(f.calls,/service |^ping /m);
   }
   const deferred=fixture('cycle; cycle; cycle; ZBT_MWAN_SOCKOPT=/missing/mwan-wrapper; echo 700 > "$DB/clock"; cycle; cycle; cycle');
-  assert.equal((deferred.calls.match(/service hang 4_1/g)||[]).length,1,'indeterminate checks cannot escalate an earlier redial to GPIO');
+  assert.equal((deferred.calls.match(/service hang 4_1/g)||[]).length,1,'indeterminate checks cannot escalate an earlier redial to destructive recovery');
 });
 test('strict device-bound HTTPS 204 proves Internet when the carrier drops ICMP',()=>{
   const f=fixture('zbt_health_probe 4_1; echo "$ZBT_HEALTH:$ZBT_HEALTH4:$ZBT_HEALTH6"',{GOOD_HTTP_DEVICE:'wwan8'});
@@ -368,7 +368,7 @@ test('busy peer recovery consumes no slot attempt or cooldown',()=>{
 test('confirmed QMI process loss receives the configured soft redial first',()=>{
   const f=fixture('echo 1 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; touch "$DB/recovery/4_1.qmi-lost"; cycle; cycle; cycle');
   assert.match(f.calls,/qmi_session_lost; requesting redial/);
-  assert.doesNotMatch(f.calls,/requesting power_cycle/);
+  assert.doesNotMatch(f.calls,/requesting power_cycle|requesting usb_reset/);
 });
 test('disabled modem and disabled recovery are read-only; missing GPIO never hangs a modem',()=>{
   for(const key of ['qmodem.4_1.enable_dial','qmodem.main.enable_dial','modem_watchdog.global.enabled','modem_watchdog.modem1.enabled']) {
@@ -378,10 +378,10 @@ test('disabled modem and disabled recovery are read-only; missing GPIO never han
   const f=fixture('echo 0 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; rm "$DB/sys/class/gpio/5g1/value"; cycle; cycle; cycle; cycle');
   assert.doesNotMatch(f.calls,/service /);
 });
-test('bounded redial-first option escalates to GPIO; growing RX errors use USB reset before GPIO fallback',()=>{
-  const f=fixture('echo 1 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; cycle; cycle; cycle; echo 700 > "$DB/clock"; cycle; cycle; cycle');
-  assert.match(f.calls,/requesting redial[\s\S]*requesting power_cycle/);
-  assert.match(f.calls,/slot=4_1 action=redial result=dispatched[\s\S]*slot=4_1 action=power_cycle result=dispatched/);
+test('power-cycle policy ladders redial then USB reset then GPIO; growing RX errors skip soft redial',()=>{
+  const f=fixture('echo 1 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; cycle; cycle; cycle; echo 700 > "$DB/clock"; cycle; cycle; cycle; echo 900 > "$DB/clock"; cycle; cycle; cycle');
+  assert.match(f.calls,/requesting redial[\s\S]*requesting usb_reset[\s\S]*requesting power_cycle/);
+  assert.match(f.calls,/slot=4_1 action=redial result=dispatched[\s\S]*slot=4_1 action=usb_reset result=dispatched[\s\S]*slot=4_1 action=power_cycle result=dispatched/);
   const bad=fixture('echo 2 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; cycle; cycle; echo 300 > "$DB/sys/class/net/wwan8/statistics/rx_errors"; cycle');
   assert.match(bad.calls,/rx_errors_growing; requesting usb_reset/);
   assert.match(bad.calls,/slot=4_1 action=usb_reset result=dispatched/);
@@ -399,9 +399,12 @@ test('adaptive radio lock excludes GPIO recovery and does not consume attempt bu
   assert.doesNotMatch(f.calls,/service /);
   assert.match(f.out,/^4 0 0 0 /);
 });
-test('persistent outage is capped at three actions per hour, including service restarts',()=>{
-  const f=fixture('for n in 1 2 3 4 5; do cycle; cycle; cycle; cycle; echo $(( $(cat "$DB/clock") + 180 )) > "$DB/clock"; done');
-  assert.equal((f.calls.match(/service hang 4_1/g)||[]).length,3);
+test('persistent outage keeps cycling recovery beyond three actions until health returns',()=>{
+  const f=fixture('for n in 1 2 3 4 5 6 7 8 9 10 11 12; do cycle; done');
+  const requested=[...f.calls.matchAll(/requesting (redial|usb_reset|power_cycle)/g)].map(m=>m[1]);
+  assert.ok(requested.length >= 4,`expected persistent recovery beyond three actions, got ${requested.join(',')}`);
+  assert.deepEqual(requested.slice(0,4),['redial','usb_reset','power_cycle','redial']);
+  assert.ok((f.calls.match(/service hang 4_1/g)||[]).length >= 4,'persistent outage must not be abandoned after three recoveries');
 });
 test('netifd publication waits for address AND route, uses external addresses, and covers IPv6-only',()=>{
   const pub=source('firmware/files/usr/lib/zbt/qmi-publish.sh');
