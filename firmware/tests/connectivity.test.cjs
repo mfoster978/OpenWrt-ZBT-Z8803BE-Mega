@@ -102,6 +102,47 @@ test('already-active policy performs no modem write', () => {
     assert.doesNotMatch(commands, /",/);
   }
 });
+test('already-automatic deployment preserves every accepted Allowed Network Types selection', () => {
+  for (const policy of ['auto', 'auto_preferred', 'auto_adaptive']) {
+    for (const rat of ['AUTO', 'LTE', 'NR5G', 'WCDMA', 'LTE:NR5G', 'NR5G:LTE', 'WCDMA:LTE', 'WCDMA:NR5G', 'WCDMA:LTE:NR5G']) {
+      const f = radioFixture('0', rat);
+      const { out, commands } = apply(f, policy);
+      assert.match(out, /status=0 changed=0/);
+      assert.equal(fs.readFileSync(path.join(f.dir, 'mode_pref'), 'utf8'), rat);
+      assert.doesNotMatch(commands, /",/, `${policy}/${rat} must not write a modem setting`);
+    }
+  }
+});
+test('leaving explicit SA or NSA for automatic restores AUTO before clearing the deployment selector', () => {
+  for (const mode of ['1', '2']) for (const policy of ['auto', 'auto_preferred', 'auto_adaptive']) {
+    const f = radioFixture(mode, 'LTE');
+    const { out, commands } = apply(f, policy);
+    assert.match(out, /status=0 changed=1/);
+    assert.equal(fs.readFileSync(path.join(f.dir, 'mode_pref'), 'utf8'), 'AUTO');
+    assert.equal(fs.readFileSync(path.join(f.dir, 'nr5g_disable_mode'), 'utf8'), '0');
+    assert.ok(commands.indexOf('"mode_pref",AUTO') < commands.indexOf('"nr5g_disable_mode",0'));
+    assert.doesNotMatch(commands, /band|ttyMODEM2/);
+  }
+});
+test('manual SA preserves NR-capable RAT choices and repairs an incompatible LTE-only choice', () => {
+  for (const rat of ['AUTO', 'NR5G', 'LTE:NR5G', 'WCDMA:LTE:NR5G']) {
+    const f = radioFixture('0', rat);
+    const { out, commands } = apply(f, 'sa');
+    assert.match(out, /status=0 changed=1/);
+    assert.equal(fs.readFileSync(path.join(f.dir, 'mode_pref'), 'utf8'), rat);
+    assert.doesNotMatch(commands, /"mode_pref",/);
+    assert.equal(fs.readFileSync(path.join(f.dir, 'nr5g_disable_mode'), 'utf8'), '2');
+  }
+  const f = radioFixture('0', 'LTE');
+  const { out, commands } = apply(f, 'sa');
+  assert.match(out, /status=0 changed=1/);
+  assert.equal(fs.readFileSync(path.join(f.dir, 'mode_pref'), 'utf8'), 'NR5G');
+  assert.ok(commands.indexOf('"mode_pref",NR5G') < commands.indexOf('"nr5g_disable_mode",2'));
+  const rollback = radioFixture('0', 'LTE');
+  assert.match(apply(rollback, 'sa', { FAIL_WRITE: 'nr5g_disable_mode:2' }).out, /status=1.*Previous settings restored/);
+  assert.equal(fs.readFileSync(path.join(rollback.dir, 'mode_pref'), 'utf8'), 'LTE');
+  assert.equal(fs.readFileSync(path.join(rollback.dir, 'nr5g_disable_mode'), 'utf8'), '0');
+});
 test('automatic is the fallback and adaptive mode requires an explicit persistent opt-in marker', () => {
   const script = radio + `
 config_section=4_1

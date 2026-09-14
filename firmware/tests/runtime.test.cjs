@@ -896,8 +896,9 @@ test('dual QMI startup stays armed across reloads, serializes netifd loading and
   assert.match(session, /zbt_qmi_notify\(\)[\s\S]*zbt-qmi-netifd\.lock[\s\S]*ubus -t 5 call network\.interface "\$action"/);
   assert.doesNotMatch(session.slice(session.indexOf('zbt_qmi_notify()'), session.indexOf('zbt_qmi_child_alive()')), /\n\s*if(?:up|down)\s/);
   const publication = file('firmware/files/usr/lib/zbt/qmi-publish.sh');
-  assert.match(publication, /zbt_qmi_session_active\(\)[\s\S]*\/proc\/\$pid\/cmdline[\s\S]*previous.*-i/);
-  assert.doesNotMatch(publication.slice(publication.indexOf('zbt_qmi_session_active()'), publication.indexOf('# Re-publish')), /zbt_health_online/);
+  assert.match(publication, /zbt_qmi_session_owned\(\)[\s\S]*\/proc\/\$pid\/cmdline[\s\S]*previous.*-i/);
+  assert.match(publication, /zbt_qmi_session_active\(\)\s*\{\s*zbt_qmi_session_owned "\$@" \|\| return 1/);
+  assert.doesNotMatch(publication.slice(publication.indexOf('zbt_qmi_session_owned()'), publication.indexOf('# Re-publish')), /zbt_health_online/);
   const apply = file('firmware/files/usr/sbin/zbt-mwan-apply');
   assert.match(apply, /flock -u 1000[\s\S]*\/etc\/init\.d\/mwan3 restart/);
   assert.match(apply, /enabled_supervised_session_tracker_paused/);

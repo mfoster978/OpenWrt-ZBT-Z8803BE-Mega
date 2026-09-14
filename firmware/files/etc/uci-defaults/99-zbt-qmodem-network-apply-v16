@@ -1,15 +1,16 @@
 #!/bin/sh
 # QModem's Network Configuration view saved UCI changes and then reloaded the
-# dial service itself. Replace that override with an explicit promise chain:
-# save the form, wait for LuCI to finish applying the staged UCI transaction,
-# and reload QModem only after a successful apply. A rejected apply must never
-# restart the modem service with partially applied settings.
+# dial service itself. Use LuCI's normal apply lifecycle instead. In the pinned
+# LuCI version changes.apply() returns no completion Promise; chaining a reload
+# would run before commit, including on Cancel or failure. QModem already has a
+# procd qmodem config-change trigger, so the view must not reload it separately.
 set -eu
 file=/www/luci-static/resources/view/qmodem/network_config.js
 [ -f "$file" ] || exit 0
 
-if grep -Fq "return ui.changes.apply(mode == '0');" "$file" &&
-   grep -Fq "return callInitAction('qmodem_network', 'reload');" "$file"; then
+if grep -Fq '// zbt-network-apply: config-change-trigger' "$file" &&
+   grep -Fq "return ui.changes.apply(mode == '0');" "$file" &&
+   ! grep -Fq "return callInitAction('qmodem_network', 'reload');" "$file"; then
 	exit 0
 fi
 
@@ -24,10 +25,9 @@ awk '
 	BEGIN { replacing=0 }
 	/^[[:space:]]*handleSaveApply: function\(ev, mode\) \{/ {
 		print "\thandleSaveApply: function(ev, mode) {"
+		print "\t\t// zbt-network-apply: config-change-trigger"
 		print "\t\treturn this.handleSave(ev).then(function() {"
 		print "\t\t\treturn ui.changes.apply(mode == '\''0'\'');"
-		print "\t\t}).then(function() {"
-		print "\t\t\treturn callInitAction('\''qmodem_network'\'', '\''reload'\'');"
 		print "\t\t});"
 		print "\t},"
 		replacing=1
@@ -42,10 +42,10 @@ awk '
 
 [ "$(grep -Fc "return ui.changes.apply(mode == '0');" "$tmp" || true)" = 1 ] || {
 	rm -f "$tmp"
-	logger -t zbt-qmodem-ui 'network Save & Apply patch failed apply-promise validation'
+	logger -t zbt-qmodem-ui 'network Save & Apply patch failed apply validation'
 	exit 1
 }
-[ "$(grep -Fc "return callInitAction('qmodem_network', 'reload');" "$tmp" || true)" = 1 ] || {
+[ "$(grep -Fc "return callInitAction('qmodem_network', 'reload');" "$tmp" || true)" = 0 ] || {
 	rm -f "$tmp"
 	logger -t zbt-qmodem-ui 'network Save & Apply patch failed reload validation'
 	exit 1
@@ -57,5 +57,5 @@ awk '
 }
 
 mv -f "$tmp" "$file"
-logger -t zbt-qmodem-ui 'network Save & Apply now reloads QModem only after successful LuCI apply'
+logger -t zbt-qmodem-ui 'network Save & Apply uses LuCI apply and the QModem config-change trigger'
 exit 0

@@ -46,7 +46,14 @@ function run(command, args, options = {}) {
     const tree = path.join(tmp, name);
     const files = [...new Set(patches.flatMap(patch => [...patch.matchAll(/^--- a\/(.+)$/gm)].map(m => m[1])))];
     if (name === 'qmodem-firstboot') files.push('target/linux/mediatek/filogic/base-files/etc/uci-defaults/56-zbt-qmodem-soft-reboot-overlay');
+    if (name === 'luci-resource-version') {
+      // Test the real pinned apply lifecycle, whose API returns no completion
+      // Promise. A Promise-only stub would hide premature service reloads.
+      files.push('modules/luci-base/htdocs/luci-static/resources/luci.js',
+        'modules/luci-base/htdocs/luci-static/resources/ui.js');
+    }
     if (name === 'qmodem') {
+      files.push('application/qmodem/files/etc/init.d/qmodem_network');
       for (const file of ['main.h', 'operations.c', 'operations.h', 'transport.c', 'transport.h',
         'ttydevice.c', 'ttydevice.h', 'modem_types.h', 'extlib/pdu.c', 'extlib/pdu.h', 'extlib/ucs2_to_utf8.c'])
         files.push('application/tom_modem/src/' + file);
@@ -183,10 +190,11 @@ ${dispatch}
         'MT7996 clears stale station queue state before disconnect teardown');
     }
   }
-  const result = run(process.execPath, ['--test', path.join(__dirname, 'mwan-reconcile.test.cjs'), path.join(__dirname, 'mwan-apply.test.cjs'), path.join(__dirname, 'modem-health.test.cjs'), path.join(__dirname, 'adaptive.test.cjs'), path.join(__dirname, 'speedify-routing.test.cjs'), path.join(__dirname, 'runtime.test.cjs'), path.join(__dirname, 'qmi-session.test.cjs'), path.join(__dirname, 'connectivity.test.cjs'), path.join(__dirname, 'led-labels.test.cjs'), path.join(__dirname, 'ttl.test.cjs'), path.join(__dirname, 'bands.test.cjs'), path.join(__dirname, 'band-ui.test.cjs'), path.join(__dirname, 'mlo-ui.test.cjs'), path.join(__dirname, 'quick-wifi-ui.test.cjs')], {
+  const result = run(process.execPath, ['--test', path.join(__dirname, 'mwan-reconcile.test.cjs'), path.join(__dirname, 'mwan-apply.test.cjs'), path.join(__dirname, 'modem-health.test.cjs'), path.join(__dirname, 'adaptive.test.cjs'), path.join(__dirname, 'speedify-routing.test.cjs'), path.join(__dirname, 'runtime.test.cjs'), path.join(__dirname, 'qmi-session.test.cjs'), path.join(__dirname, 'qmi-publish.test.cjs'), path.join(__dirname, 'qmodem-network-apply.test.cjs'), path.join(__dirname, 'connectivity.test.cjs'), path.join(__dirname, 'led-labels.test.cjs'), path.join(__dirname, 'ttl.test.cjs'), path.join(__dirname, 'bands.test.cjs'), path.join(__dirname, 'band-ui.test.cjs'), path.join(__dirname, 'mlo-ui.test.cjs'), path.join(__dirname, 'quick-wifi-ui.test.cjs')], {
     env: {
       ...process.env,
       QMODEM_TEST_TREE: path.join(tmp, 'qmodem'),
+      LUCI_TEST_TREE: path.join(tmp, 'luci-resource-version'),
       MWAN3_TEST_TREE: path.join(tmp, 'packages'),
       MWAN3_LUCI_TEST_TREE: path.join(tmp, 'mwan3-luci'),
       MLO_TEST_TREE: path.join(tmp, 'mlo')

@@ -51,12 +51,18 @@ curl() {
  case "$*" in *"--interface if!$GOOD_HTTP_DEVICE"*) [ -n "$GOOD_HTTP_DEVICE" ] && printf 204 ;; *) return 1 ;; esac
 }
 service() {
- local attempts
+ local attempts gpio usb
  echo "service $*" >> "$DB/calls"
  case "$1:$2" in
   hang:4_1|hang:2_1)
    rm -f "$DB/worker-$2"
    [ -z "$OLD_WORKER_STOPS_AFTER" ] || echo 0 > "$DB/stopping"
+   if [ "$DROP_HARDWARE_AFTER_HANG" = 1 ]; then
+    case "$2" in 4_1) gpio=5g1; usb=4-1 ;; 2_1) gpio=5g2; usb=2-1 ;; esac
+    printf '0\\n' > "$DB/sys/class/gpio/$gpio/value"
+    mv "$DB/sys/bus/usb/devices/$usb" "$DB/usb-offline-$2"
+   fi
+   [ -z "$DISABLE_AFTER_HANG" ] || printf '0\\n' > "$DB/uci/$DISABLE_AFTER_HANG"
    ;;
   dial:4_1|dial:2_1)
    attempts=$(cat "$DB/dial-attempts-$2" 2>/dev/null || echo 0)
@@ -100,6 +106,7 @@ sleep() {
  fi
  if [ "$1" = 10 ]; then
   [ "$INTERRUPT_GPIO_PULSE" != 1 ] || exit 1
+  [ -z "$DISABLE_DURING_PULSE" ] || printf '0\\n' > "$DB/uci/$DISABLE_DURING_PULSE"
   for pair in '5g1 wwan8' '5g2 wwan3'; do set -- $pair
    if [ "$(cat "$DB/sys/class/gpio/$1/value")" = 0 ]; then echo $(( $(cat "$DB/sys/class/net/$2/ifindex") + 1 )) > "$DB/sys/class/net/$2/ifindex"; fi
   done
@@ -111,6 +118,17 @@ cycle() { zbt_health_probe 4_1 || :; zbt_health_save 4_1; zbt_recovery_check 4_1
     env:{...process.env,DB:d,ZBT_SYSFS:path.join(d,'sys'),ZBT_HEALTH_DIR:path.join(d,'health'),ZBT_5G_STATE:path.join(d,'radio'),ZBT_RECOVERY_DIR:path.join(d,'recovery'),ZBT_MWAN_SOCKOPT:mockSockopt,GOOD_FAMILY:'-4',GOOD_DEVICE:'',REGISTER_WORKER:'1',...options}});
   assert.ifError(result.error); assert.equal(result.status,0,result.stderr+result.stdout);
   return {d,out:result.stdout,calls:fs.existsSync(path.join(d,'calls'))?fs.readFileSync(path.join(d,'calls'),'utf8'):''};
+}
+function assertPowerCycleSequence(calls, section, waitSeconds=0) {
+  const power=section==='4_1'?'0/1':'1/0';
+  const expected=[`service hang ${section}`,
+    ...Array.from({length:waitSeconds},()=> 'sleep 1 power=1/1'),
+    `log -t modem-watchdog slot=${section} action=power_cycle stage=teardown result=complete wait_seconds=${waitSeconds}`,
+    `log -t modem-watchdog slot=${section} action=power_cycle stage=gpio-low result=starting seconds=10`,
+    `sleep 10 power=${power}`,
+    `log -t modem-watchdog slot=${section} action=power_cycle stage=gpio-high result=complete`,
+    `service dial ${section}`].join('\n');
+  assert.ok(calls.includes(expected),`ordered teardown/low pulse/high/restart sequence missing:\n${calls}`);
 }
 test('each daemon recreates its missing enabled dial worker after exhausting destructive recovery budget',()=>{
   for (const section of ['4_1','2_1']) {
@@ -221,7 +239,7 @@ rm "$DB/recovery/4_1.recovering"; echo 0 > "$DB/uci/qmodem.4_1.enable_dial"; zbt
 test('three failed probes trigger only selected GPIO, then explicitly dial; cooldown prevents storms',()=>{
   const f=fixture('echo 0 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; cycle; cycle; cycle; cycle; cycle; cycle');
   assert.equal((f.calls.match(/service hang 4_1/g)||[]).length,1);
-  assert.match(f.calls,/service hang 4_1\nsleep 10 power=0\/1\nservice dial 4_1/);
+  assertPowerCycleSequence(f.calls,'4_1');
   assert.doesNotMatch(f.calls,/service (?:redial|.*2_1)/);
   assert.equal(fs.readFileSync(path.join(f.d,'sys/class/gpio/5g1/value'),'utf8').trim(),'1');
   assert.equal(fs.readFileSync(path.join(f.d,'sys/class/net/wwan8/ifindex'),'utf8').trim(),'18');
@@ -241,12 +259,12 @@ test('IPv6-only and dual-stack partial success prevent GPIO recovery',()=>{
 });
 test('Modem 2 GPIO recovery leaves Modem 1 alone and explicitly starts Modem 2',()=>{
   const f=fixture('echo 0 > "$DB/uci/modem_watchdog.modem2.redial_attempts"; for n in 1 2 3 4; do zbt_health_probe 2_1 || :; zbt_recovery_check 2_1 modem2; done');
-  assert.match(f.calls,/service hang 2_1\nsleep 10 power=1\/0\nservice dial 2_1/);
+  assertPowerCycleSequence(f.calls,'2_1');
   assert.doesNotMatch(f.calls,/service .*4_1/);
 });
 test('GPIO recovery registers the persistent dial worker before USB/netdev re-enumeration',()=>{
   const f=fixture('echo 0 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; zbt_netdev() { return 1; }; cycle; cycle; cycle');
-  assert.match(f.calls,/service hang 4_1\nsleep 10 power=0\/1\nservice dial 4_1/);
+  assertPowerCycleSequence(f.calls,'4_1');
   assert.doesNotMatch(f.calls,/sleep 1 power=/, 'recovery must not time out polling for a netdev before dispatching dial');
   assert.doesNotMatch(f.calls,/service .*2_1/);
 });
@@ -274,11 +292,12 @@ test('recovery waits up to thirty seconds for the old worker without overlapping
   const body='echo 0 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; touch "$DB/worker-4_1"; cycle; cycle; cycle';
   const stopped=fixture(body,{OLD_WORKER_STOPS_AFTER:'30'});
   assert.equal((stopped.calls.match(/sleep 1 power=1\/1/g)||[]).length,30);
-  assert.match(stopped.calls,/service hang 4_1[\s\S]*sleep 10 power=0\/1\nservice dial 4_1/);
+  assertPowerCycleSequence(stopped.calls,'4_1',30);
   assert.match(stopped.calls,/action=power_cycle result=dispatched/);
   const stillLive=fixture(body,{OLD_WORKER_STOPS_AFTER:'31'});
   assert.equal((stillLive.calls.match(/sleep 1 power=1\/1/g)||[]).length,30);
   assert.doesNotMatch(stillLive.calls,/service dial|sleep [0-9]+ power=(?:0\/|1\/0)/);
+  assert.match(stillLive.calls,/stage=teardown result=timeout seconds=30/);
   assert.match(stillLive.calls,/action=power_cycle result=incomplete/);
   assert.equal(fs.readFileSync(path.join(stillLive.d,'sys/class/gpio/5g1/value'),'utf8').trim(),'1');
 });
@@ -290,6 +309,47 @@ test('interruption during the ten-second GPIO pulse restores power and clears on
   for (const gpio of ['5g1','5g2']) assert.equal(fs.readFileSync(path.join(f.d,`sys/class/gpio/${gpio}/value`),'utf8').trim(),'1');
   assert.ok(!fs.existsSync(path.join(f.d,'recovery/4_1.power-off')));
   assert.ok(!fs.existsSync(path.join(f.d,'recovery/4_1.recovering')));
+});
+test('an authorized recovery completes despite teardown dropping GPIO power and USB availability for either slot',()=>{
+  for (const [section,key,peer,peerUsb] of [['4_1','modem1','2_1','2-1'],['2_1','modem2','4_1','4-1']]) {
+    const f=fixture(`echo 0 > "$DB/uci/modem_watchdog.${key}.redial_attempts"
+for n in 1 2 3; do zbt_health_probe ${section} || :; zbt_recovery_check ${section} ${key}; done`,{DROP_HARDWARE_AFTER_HANG:'1'});
+    assertPowerCycleSequence(f.calls,section);
+    assert.match(f.calls,new RegExp(`slot=${section} action=power_cycle result=dispatched`));
+    assert.doesNotMatch(f.calls,/cancelled-admin-disabled|result=incomplete/);
+    assert.doesNotMatch(f.calls,new RegExp(`service .*${peer}`));
+    assert.ok(fs.existsSync(path.join(f.d,`usb-offline-${section}`)),'USB can still be unavailable when the persistent worker registers');
+    assert.ok(fs.existsSync(path.join(f.d,`sys/bus/usb/devices/${peerUsb}`)));
+    for (const gpio of ['5g1','5g2']) assert.equal(fs.readFileSync(path.join(f.d,`sys/class/gpio/${gpio}/value`),'utf8').trim(),'1');
+    assert.ok(!fs.existsSync(path.join(f.d,`recovery/${section}.recovering`)));
+    assert.ok(!fs.existsSync(path.join(f.d,`recovery/${section}.power-off`)));
+  }
+});
+test('administrative disable after teardown still cancels recovery before the GPIO pulse on both slots',()=>{
+  for (const [section,key,peer] of [['4_1','modem1','2_1'],['2_1','modem2','4_1']]) {
+    for (const disabled of ['qmodem.main.enable_dial',`qmodem.${section}.enable_dial`,'modem_watchdog.global.enabled','modem_watchdog.global.actions_enabled',`modem_watchdog.${key}.enabled`]) {
+      const f=fixture(`echo 0 > "$DB/uci/modem_watchdog.${key}.redial_attempts"
+for n in 1 2 3; do zbt_health_probe ${section} || :; zbt_recovery_check ${section} ${key}; done`,{DISABLE_AFTER_HANG:disabled});
+      assert.match(f.calls,new RegExp(`service hang ${section}`));
+      assert.match(f.calls,/stage=post-teardown result=cancelled-admin-disabled/);
+      assert.doesNotMatch(f.calls,/service dial|stage=gpio-low|sleep 10/);
+      assert.doesNotMatch(f.calls,new RegExp(`service .*${peer}`));
+      for (const gpio of ['5g1','5g2']) assert.equal(fs.readFileSync(path.join(f.d,`sys/class/gpio/${gpio}/value`),'utf8').trim(),'1');
+    }
+  }
+});
+test('administrative disable during a pulse restores power but prevents restart on either slot',()=>{
+  for (const [section,key,peer,power] of [['4_1','modem1','2_1','0/1'],['2_1','modem2','4_1','1/0']]) {
+    const f=fixture(`echo 0 > "$DB/uci/modem_watchdog.${key}.redial_attempts"
+for n in 1 2 3; do zbt_health_probe ${section} || :; zbt_recovery_check ${section} ${key}; done`,{DISABLE_DURING_PULSE:`qmodem.${section}.enable_dial`});
+    assert.ok(f.calls.includes(`sleep 10 power=${power}\nlog -t modem-watchdog slot=${section} action=power_cycle stage=gpio-high result=complete`));
+    assert.match(f.calls,/stage=restart result=cancelled-admin-disabled/);
+    assert.doesNotMatch(f.calls,/service dial/);
+    assert.doesNotMatch(f.calls,new RegExp(`service .*${peer}`));
+    for (const gpio of ['5g1','5g2']) assert.equal(fs.readFileSync(path.join(f.d,`sys/class/gpio/${gpio}/value`),'utf8').trim(),'1');
+    assert.ok(!fs.existsSync(path.join(f.d,`recovery/${section}.power-off`)));
+    assert.ok(!fs.existsSync(path.join(f.d,`recovery/${section}.recovering`)));
+  }
 });
 test('only an interrupted owned GPIO pulse is restored; manual power-off is preserved',()=>{
   const f=fixture(`echo 0 > "$DB/sys/class/gpio/5g1/value"
