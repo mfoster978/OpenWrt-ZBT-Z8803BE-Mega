@@ -124,6 +124,22 @@ function cameraCompatibilityTarget(targets) {
 	return { radio: radio, section: section };
 }
 
+function keepMloOffLegacyRadio(legacyRadio) {
+	uci.sections('wireless', 'wifi-iface').forEach(function(section) {
+		var mlo = section.mlo === '1' || section.mlo === 1 || section.mlo === true;
+		if (!mlo)
+			return;
+		var devices = asList(section.device);
+		if (devices.indexOf(legacyRadio) === -1)
+			return;
+		var remaining = devices.filter(function(device) { return device !== legacyRadio; });
+		if (remaining.length >= 2)
+			uci.set('wireless', section['.name'], 'device', remaining);
+		else
+			uci.set('wireless', section['.name'], 'disabled', '1');
+	});
+}
+
 function applyCameraCompatibility(targets) {
 	var target = cameraCompatibilityTarget(targets);
 	if (!target)
@@ -143,6 +159,7 @@ function applyCameraCompatibility(targets) {
 	uci.set('wireless', target.section, 'ocv', '0');
 	uci.set('wireless', target.section, 'beacon_prot', '0');
 	uci.set('wireless', target.section, 'wmm', '1');
+	keepMloOffLegacyRadio(target.radio);
 	return uci.save().then(function() { return ui.changes.apply(); });
 }
 
@@ -192,6 +209,7 @@ return view.extend({
 			'click': function() {
 				ui.showModal(_('Apply 2.4 GHz Legacy Device Compatibility?'), [
 					E('p', {}, _('The primary 2.4 GHz network will use channel 1, WPA2-AES, 20 MHz 802.11n, and legacy rates, with protected management frames and fast roaming disabled. Its network name and password stay the same. Wi-Fi will reconnect briefly.')),
+					E('p', {}, _('If a Wi-Fi 7 MLO network currently includes 2.4 GHz, that link will be removed so MLO can continue on its remaining Wi-Fi 7 bands.')),
 					E('p', {}, _('The channel, 20 MHz radio mode, and rates also apply to other networks sharing the 2.4 GHz radio. Their security, names, and passwords stay the same.')),
 					E('div', { 'class': 'right' }, [
 						E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')), ' ',
