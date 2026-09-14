@@ -162,7 +162,7 @@ zbt_recovery_resume() (
 	zbt_5g_unlock
 )
 zbt_recovery_check() {
-	local previous_last previous_fails result
+	local previous_last previous_fails result stage cycle_len
 	local section="$1" key="$2" now fails=0 good=0 last=0 attempts=0 window=0 cycles=0 rx=0 oldrx=0 oldindex=0 index delta=0 reason=unreachable threshold cooldown verify limit action grace
 	now=$(zbt_health_now)
 	mkdir -p "$ZBT_RECOVERY_DIR"
@@ -187,7 +187,7 @@ zbt_recovery_check() {
 	grace=$(zbt_recovery_uint "$(zbt_recovery_get global.boot_grace_seconds)" 60 60 600)
 	limit=$(zbt_recovery_uint "$(zbt_recovery_get "$key.redial_attempts")" 1 0 2)
 	verify=$(zbt_recovery_uint "$(zbt_recovery_get global.redial_verify_seconds)" 60 30 180)
-	if [ "$attempts" -gt 0 ] && [ "$attempts" -le "$limit" ]; then cooldown=$verify; fi
+	[ "$attempts" -eq 0 ] || cooldown=$verify
 	if [ "$ZBT_HEALTH" = online ]; then
 		good=$((good + 1))
 		if [ "$good" -ge 3 ]; then fails=0; attempts=0; rm -f "$ZBT_RECOVERY_DIR/$section.qmi-lost"; fi
@@ -198,13 +198,23 @@ zbt_recovery_check() {
 	fi
 	[ $((now - window)) -lt 3600 ] || { window=$now; cycles=0; }
 	if [ "$ZBT_HEALTH" = offline ] && [ "$fails" -ge "$threshold" ] &&
-		[ "$now" -ge "$grace" ] && { [ "$last" = 0 ] || [ $((now - last)) -ge "$cooldown" ]; } &&
-		[ "$cycles" -lt 3 ]; then
+		[ "$now" -ge "$grace" ] && { [ "$last" = 0 ] || [ $((now - last)) -ge "$cooldown" ]; }; then
 		action=$(zbt_recovery_get "$key.action")
-		if [ "$action" = power_cycle ] && [ "$reason" = rx_errors_growing ] && [ "$attempts" = 0 ]; then
-			action=usb_reset
-		elif [ "$action" = power_cycle ] && [ "$attempts" -lt "$limit" ]; then
-			action=redial
+		if [ "$action" = power_cycle ]; then
+			if [ "$reason" = rx_errors_growing ]; then
+				stage=$((attempts % 2))
+				if [ "$stage" -eq 0 ]; then action=usb_reset; else action=power_cycle; fi
+			elif [ "$limit" -gt 0 ]; then
+				cycle_len=$((limit + 2))
+				stage=$((attempts % cycle_len))
+				if [ "$stage" -lt "$limit" ]; then
+					action=redial
+				elif [ "$stage" -eq "$limit" ]; then
+					action=usb_reset
+				else
+					action=power_cycle
+				fi
+			fi
 		fi
 		case "$action" in
 			power_cycle|redial|disconnect|usb_reset)
@@ -212,7 +222,7 @@ zbt_recovery_check() {
 					previous_last=$last; previous_fails=$fails
 					last=$now; attempts=$((attempts + 1)); cycles=$((cycles + 1)); fails=0
 					printf '%s %s %s %s %s %s %s %s\n' "$fails" "$good" "$last" "$attempts" "$window" "$cycles" "$rx" "$index" > "$ZBT_RECOVERY_DIR/$section.state"
-					logger -t modem-watchdog "$section: $reason; requesting $action (attempt $cycles/3 this hour)"
+					logger -t modem-watchdog "$section: $reason; requesting $action (attempt $cycles this hour)"
 					result=0
 					zbt_recovery_action "$section" "$action" || result=$?
 					if [ "$result" = 75 ]; then
