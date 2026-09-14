@@ -31,8 +31,13 @@ zbt_recovery_worker_pid() {
 	case "$pid" in ''|*[!0-9]*|0|1) return 1 ;; esac
 	printf '%s\n' "$pid"
 }
+# Keep USB sysfs writes behind a helper so recovery can verify the resulting
+# kernel state instead of assuming the write return code tells the whole story.
+zbt_recovery_usb_write() {
+	printf '%s\n' "$1" > "$2"
+}
 zbt_recovery_action() (
-	local section="$1" action="$2" config_section="$1" path pid tries=0 powered_off=0 usb_disabled=0 usb_auth='' owner rest registered=''
+	local section="$1" action="$2" config_section="$1" path pid tries=0 powered_off=0 usb_disabled=0 usb_auth='' usb_write=0 owner rest registered=''
 	zbt_recovery_allowed "$section" || exit 1
 	exec 6>"$ZBT_RECOVERY_DIR/action.lock"
 	flock -n 6 || exit 75
@@ -44,7 +49,7 @@ zbt_recovery_action() (
 	read -r owner rest < /proc/self/stat
 	printf '%s\n' "$owner" > "$path"
 	finish() {
-		[ "$usb_disabled" != 1 ] || printf '1\n' > "$usb_auth"
+		[ "$usb_disabled" != 1 ] || zbt_recovery_usb_write 1 "$usb_auth" >/dev/null 2>&1 || true
 		[ "$powered_off" != 1 ] || printf '1\n' > "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value"
 		[ "$(cat "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value" 2>/dev/null)" != 1 ] || rm -f "$ZBT_RECOVERY_DIR/$section.power-off"
 		rm -f "$path"
@@ -78,16 +83,27 @@ zbt_recovery_action() (
 	if [ "$action" = usb_reset ]; then
 		logger -t modem-watchdog "slot=$section action=$action stage=usb-deauthorize result=starting"
 		usb_disabled=1
-		if ! printf '0\n' > "$usb_auth"; then
-			logger -t modem-watchdog "slot=$section action=$action stage=usb-deauthorize result=write-failed"
+		usb_write=0
+		zbt_recovery_usb_write 0 "$usb_auth" 2>/dev/null || usb_write=$?
+		tries=0
+		while [ "$tries" -lt 5 ]; do
+			[ "$(cat "$usb_auth" 2>/dev/null)" = 0 ] && break
+			zbt_netdev "$section" >/dev/null 2>&1 || break
+			tries=$((tries + 1))
+			sleep 1
+		done
+		if [ "$(cat "$usb_auth" 2>/dev/null)" != 0 ] && zbt_netdev "$section" >/dev/null 2>&1; then
+			logger -t modem-watchdog "slot=$section action=$action stage=usb-deauthorize result=verify-failed write_code=$usb_write wait_seconds=$tries"
 			exit 1
 		fi
+		logger -t modem-watchdog "slot=$section action=$action stage=usb-deauthorize result=complete write_code=$usb_write wait_seconds=$tries"
 		sleep 5
-		if ! printf '1\n' > "$usb_auth"; then
-			logger -t modem-watchdog "slot=$section action=$action stage=usb-reauthorize result=write-failed"
-			exit 1
+		usb_write=0
+		if [ -w "$usb_auth" ]; then
+			zbt_recovery_usb_write 1 "$usb_auth" 2>/dev/null || usb_write=$?
+		else
+			usb_write=1
 		fi
-		usb_disabled=0
 		tries=0
 		while [ "$tries" -lt 20 ]; do
 			zbt_netdev "$section" >/dev/null 2>&1 && break
@@ -95,10 +111,11 @@ zbt_recovery_action() (
 			sleep 1
 		done
 		if ! zbt_netdev "$section" >/dev/null 2>&1; then
-			logger -t modem-watchdog "slot=$section action=$action stage=usb-reauthorize result=netdev-timeout seconds=20"
+			logger -t modem-watchdog "slot=$section action=$action stage=usb-reauthorize result=netdev-timeout write_code=$usb_write seconds=20"
 			exit 1
 		fi
-		logger -t modem-watchdog "slot=$section action=$action stage=usb-reauthorize result=complete wait_seconds=$tries"
+		usb_disabled=0
+		logger -t modem-watchdog "slot=$section action=$action stage=usb-reauthorize result=complete write_code=$usb_write wait_seconds=$tries"
 	fi
 	if [ "$action" = power_cycle ]; then
 		powered_off=1
