@@ -31,17 +31,32 @@ start_service() {
 	add_modem 2_1
 }
 reload_service() { start; }
+instance_present() {
+	ubus -t 5 call service list '{"name":"qmodem_network"}' 2>/dev/null |
+		jq -e --arg name "modem_$1" '.qmodem_network.instances[$name] != null' >/dev/null 2>&1
+}
+instance_running() {
+	ubus -t 5 call service list '{"name":"qmodem_network"}' 2>/dev/null |
+		jq -e --arg name "modem_$1" '.qmodem_network.instances[$name].running == true' >/dev/null 2>&1
+}
 dial() {
+	local attempts=0
 	armed "$1" || return 1
+	# Recovery can call dial immediately after hang. If procd still exposes the
+	# old named instance, wait for deletion instead of losing the replacement.
+	if instance_present "$1"; then
+		instance_running "$1" && return 0
+		while instance_present "$1"; do
+			[ "$attempts" -lt 30 ] || return 1
+			sleep 1
+			attempts=$((attempts + 1))
+		done
+	fi
 	rc_procd add_modem "$1"
 }
 hang() {
 	case "$1" in 4_1|2_1) ;; *) return 1 ;; esac
 	procd_kill qmodem_network "modem_$1"
-}
-instance_present() {
-	ubus -t 5 call service list '{"name":"qmodem_network"}' 2>/dev/null |
-		jq -e --arg name "modem_$1" '.qmodem_network.instances[$name] != null' >/dev/null 2>&1
 }
 redial() {
 	local attempts=0
