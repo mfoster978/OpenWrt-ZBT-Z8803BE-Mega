@@ -242,7 +242,7 @@ grep -Fq "name: _('Preferred Bands')" firmware/patches/qmodem-performance-ui.pat
 grep -Fq "''|4_1|2_1|modem1|modem2)" firmware/files/usr/sbin/zbt-qmodem-profile
 grep -Fq 'zbt_5g_policy=auto' firmware/files/usr/sbin/zbt-qmodem-profile
 grep -Fq 'zbt_5g_adaptive_opt_in=1' firmware/files/usr/lib/zbt/qmodem-5g.sh
-grep -Fq 'sleep 8' firmware/files/usr/lib/zbt/modem-recovery.sh
+grep -Fq 'sleep 10' firmware/files/usr/lib/zbt/modem-recovery.sh
 grep -Fq '+flock' firmware/feeds/luci-app-modem-watchdog/Makefile
 grep -Fq 'action=worker result=started' firmware/feeds/luci-app-modem-watchdog/root/usr/sbin/modem-watchdog
 grep -Fq 'action=recovery-gate' firmware/feeds/luci-app-modem-watchdog/root/usr/sbin/modem-watchdog
