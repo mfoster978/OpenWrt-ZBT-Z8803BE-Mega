@@ -10,7 +10,8 @@ const root = path.resolve(__dirname, '../..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'zbt-pinned-patches-'));
 const specs = [
   ['qmodem-firstboot', '0xFar5eer/openwrt25.12_ZBT_Z8803BE', 'edc738504fe8fae81eb15de967456204699b1830', 'zbt-qmodem-rpc-firstboot.patch', ''],
-  ['qmodem', 'FUjr/QModem', 'a8b8a63e5b0853c79d2ad3f1ebbb673a724872bf', ['qmodem-dual-runtime.patch', 'qmodem-cell-discovery.patch', 'qmodem-5g-deployment.patch', 'qmodem-performance-ui.patch', 'qmodem-mega-policy-ui.patch', 'qmodem-connectivity-v5.patch', 'qmodem-at-transport-v6.patch', 'qmodem-radio-rpc-v6.patch', 'qmodem-session-lifecycle-v7.patch', 'qmodem-adaptive-v8.patch', 'qmodem-health-v9.patch', 'qmodem-netifd-serialization-v10.patch', 'qmodem-netifd-arming-v11.patch', 'qmodem-netifd-disabled-v12.patch', 'qmodem-adaptive-safety-v13.patch', 'qmodem-fixed-slot-state-v14.patch'], ''],
+  ['qmodem', 'FUjr/QModem', 'a8b8a63e5b0853c79d2ad3f1ebbb673a724872bf', ['qmodem-dual-runtime.patch', 'qmodem-cell-discovery.patch', 'qmodem-5g-deployment.patch', 'qmodem-performance-ui.patch', 'qmodem-mega-policy-ui.patch', 'qmodem-connectivity-v5.patch', 'qmodem-at-transport-v6.patch', 'qmodem-radio-rpc-v6.patch', 'qmodem-session-lifecycle-v7.patch', 'qmodem-adaptive-v8.patch', 'qmodem-health-v9.patch', 'qmodem-netifd-serialization-v10.patch', 'qmodem-netifd-arming-v11.patch', 'qmodem-netifd-disabled-v12.patch', 'qmodem-adaptive-safety-v13.patch', 'qmodem-fixed-slot-state-v14.patch', 'qmodem-fixed-slot-dial-v15.patch'], ''],
+  ['mt76', 'openwrt/mt76', '39c960c3ada558b4c2e7915772483d3731573d09', 'mt76-mt7996-ps-buffering.patch', ''],
   ['wifi-firstboot', '0xFar5eer/openwrt25.12_ZBT_Z8803BE', 'edc738504fe8fae81eb15de967456204699b1830', 'zbt-wifi-firstboot-v7.patch', ''],
   ['packages', 'openwrt/packages', 'db3b315119519f9194dad8aa668aa40618df9b20', ['mwan3-speed-policy.patch', 'mwan3-mega-lifecycle.patch'], ''],
   ['mwan3-luci', 'openwrt/luci', 'a611522a2bfc24ca2625e8cd2fcc9404288532a6', 'luci-app-mwan3-route-metric.patch', ''],
@@ -137,6 +138,23 @@ function run(command, args, options = {}) {
         'late fixed-slot enumeration must not persist discovery-disabled state');
       assert.match(dial, /4_1\|2_1\) state_fullfill=1/,
         'fixed-slot dial readiness must use enable_dial rather than transient discovery state');
+      assert.match(dial, /case "\$modem_config" in[\s\S]*4_1\|2_1\)[\s\S]*dial;;[\s\S]*case "\$state" in/,
+        'fixed-slot final dial dispatch must not turn a retry into hang for stale discovery state');
+      const dispatch = dial.slice(dial.lastIndexOf('case "$2" in'));
+      const dispatchOutput = run('busybox', ['sh', '-c', `
+state=disabled
+hang() { echo hang; }
+dial() { echo dial; }
+update_config() { :; }
+set -- 4_1 dial
+modem_config=$1
+${dispatch}
+set -- external dial
+modem_config=$1
+${dispatch}
+`]);
+      assert.equal(dispatchOutput, 'dial\nhang\n',
+        'stale fixed slot dials while an unrelated disabled QModem section still hangs');
       assert.doesNotMatch(dial.slice(dial.indexOf('for logical in 4_1'), dial.indexOf('if [ "$firewall_reload_flag"')),
         /qmodem\.\$[^\n]*\.state/,
         'netifd re-arm must not reject a live fixed slot because discovery state is stale');
@@ -145,6 +163,17 @@ function run(command, args, options = {}) {
       run('gcc', ['-o', binary, ...['main.c', 'utils.c', 'operations.c', 'transport.c', 'ttydevice.c',
         'extlib/pdu.c', 'extlib/ucs2_to_utf8.c'].map(file => path.join(source, file)), '-pthread']);
       process.stdout.write(run('python3', [path.join(__dirname, 'tom-modem-transport.py'), binary]));
+    }
+    if (name === 'mt76') {
+      const header = fs.readFileSync(path.join(tree, 'mt76.h'), 'utf8');
+      const mcu = fs.readFileSync(path.join(tree, 'mt7996/mcu.c'), 'utf8');
+      const tx = fs.readFileSync(path.join(tree, 'tx.c'), 'utf8');
+      assert.match(header, /MT_DRV_HW_PS_BUFFERING/, 'mt76 exposes hardware PS buffering capability');
+      assert.match(mcu, /MCU_UNI_EVENT_PS_SYNC/, 'MT7996 consumes firmware power-save transitions');
+      assert.match(tx, /starving all other stations/,
+        'an undrainable sleeping client cannot starve all radio queues');
+      assert.match(tx, /more_data \|= mt76_ps_tids_pending/,
+        'buffered-frame release preserves the more-data indication');
     }
   }
   const result = run(process.execPath, ['--test', path.join(__dirname, 'mwan-reconcile.test.cjs'), path.join(__dirname, 'mwan-apply.test.cjs'), path.join(__dirname, 'modem-health.test.cjs'), path.join(__dirname, 'adaptive.test.cjs'), path.join(__dirname, 'speedify-routing.test.cjs'), path.join(__dirname, 'runtime.test.cjs'), path.join(__dirname, 'qmi-session.test.cjs'), path.join(__dirname, 'connectivity.test.cjs'), path.join(__dirname, 'led-labels.test.cjs'), path.join(__dirname, 'ttl.test.cjs'), path.join(__dirname, 'bands.test.cjs'), path.join(__dirname, 'band-ui.test.cjs'), path.join(__dirname, 'mlo-ui.test.cjs'), path.join(__dirname, 'quick-wifi-ui.test.cjs')], {

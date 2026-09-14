@@ -1,0 +1,392 @@
+--- a/mt76.h
++++ b/mt76.h
+@@ -550,6 +550,7 @@ struct mt76_hw_cap {
+ #define MT_DRV_HW_MGMT_TXQ		BIT(4)
+ #define MT_DRV_AMSDU_OFFLOAD		BIT(5)
+ #define MT_DRV_IGNORE_TXS_FAILED	BIT(6)
++#define MT_DRV_HW_PS_BUFFERING		BIT(7)
+ 
+ struct mt76_driver_ops {
+ 	u32 drv_flags;
+@@ -1548,6 +1549,8 @@ void mt76_release_buffered_frames(struct ieee80211_hw *hw,
+ 				  u16 tids, int nframes,
+ 				  enum ieee80211_frame_release_type reason,
+ 				  bool more_data);
++void mt76_sta_ps_transition(struct mt76_dev *dev, struct mt76_wcid *wcid,
++			    bool ps);
+ bool mt76_has_tx_pending(struct mt76_phy *phy);
+ int mt76_update_channel(struct mt76_phy *phy);
+ void mt76_update_survey(struct mt76_phy *phy);
+--- a/mt76_connac_mcu.h
++++ b/mt76_connac_mcu.h
+@@ -1066,6 +1066,7 @@ enum {
+ 	MCU_UNI_EVENT_IE_COUNTDOWN = 0x09,
+ 	MCU_UNI_EVENT_COREDUMP = 0x0a,
+ 	MCU_UNI_EVENT_BSS_BEACON_LOSS = 0x0c,
++	MCU_UNI_EVENT_PS_SYNC = 0x0d,
+ 	MCU_UNI_EVENT_SCAN_DONE = 0x0e,
+ 	MCU_UNI_EVENT_RDD_REPORT = 0x11,
+ 	MCU_UNI_EVENT_ROC = 0x27,
+--- a/mt7996/mcu.c
++++ b/mt7996/mcu.c
+@@ -826,6 +826,89 @@ mt7996_mcu_wed_rro_event(struct mt7996_dev *dev, struct sk_buff *skb)
+ 	}
+ }
+ 
++static void
++mt7996_mcu_ps_transition(struct mt7996_dev *dev, u16 wcid_idx, bool ps)
++{
++	struct mt76_wcid *wcid;
++
++	wcid = mt76_wcid_ptr(dev, wcid_idx);
++	if (!wcid || !wcid_to_sta(wcid))
++		return;
++
++	mt76_sta_ps_transition(&dev->mt76, wcid, ps);
++}
++
++static void
++mt7996_mcu_rx_ps_sync(struct mt7996_dev *dev, struct sk_buff *skb)
++{
++	struct mt7996_mcu_ps_sync_event *event = (void *)skb->data;
++	struct tlv *tlv;
++	int len;
++
++	if (skb->len < sizeof(*event))
++		return;
++
++	skb_pull(skb, sizeof(*event));
++
++	len = skb->len;
++	while (len >= sizeof(*tlv)) {
++		u16 tag, tag_len;
++
++		tlv = (struct tlv *)skb->data;
++		tag = le16_to_cpu(tlv->tag);
++		tag_len = le16_to_cpu(tlv->len);
++		/* a tag_len below the header size would not advance the buffer */
++		if (tag_len < sizeof(*tlv) || tag_len > len)
++			break;
++
++		switch (tag) {
++		case UNI_PS_CLIENT_INFO: {
++			struct mt7996_mcu_ps_client_info *info = (void *)tlv;
++
++			if (tag_len < sizeof(*info))
++				break;
++
++			mt7996_mcu_ps_transition(dev,
++						 le16_to_cpu(info->wlan_idx),
++						 info->ps_bit);
++			break;
++		}
++		case UNI_PS_MULTI_CLIENT_INFO: {
++			struct mt7996_mcu_ps_multi_client_info *info = (void *)tlv;
++			u16 cnt;
++			int i;
++
++			if (tag_len < sizeof(*info))
++				break;
++
++			cnt = min_t(u16, le16_to_cpu(info->sta_cnt),
++				    (tag_len - sizeof(*info)) / sizeof(info->sta_ps_info[0]));
++			for (i = 0; i < cnt; i++) {
++				u16 entry = le16_to_cpu(info->sta_ps_info[i]);
++
++				mt7996_mcu_ps_transition(dev,
++					FIELD_GET(MT7996_PS_MULTI_WCID, entry),
++					!!(entry & MT7996_PS_MULTI_PS_BIT));
++			}
++			break;
++		}
++		case UNI_PS_MULTI_CLIENT_INFO_BITMAP: {
++			u8 *bitmap = tlv->data;
++			int bitmap_len = tag_len - sizeof(*tlv);
++			int i;
++
++			for (i = 0; i < bitmap_len * 8; i++)
++				mt7996_mcu_ps_transition(dev, i,
++					!!(bitmap[i / 8] & BIT(i % 8)));
++			break;
++		}
++		}
++
++		skb_pull(skb, tag_len);
++		len -= tag_len;
++	}
++}
++
+ static void
+ mt7996_mcu_uni_rx_unsolicited_event(struct mt7996_dev *dev, struct sk_buff *skb)
+ {
+@@ -847,6 +930,9 @@ mt7996_mcu_uni_rx_unsolicited_event(struct mt7996_dev *dev, struct sk_buff *skb)
+ 	case MCU_UNI_EVENT_WED_RRO:
+ 		mt7996_mcu_wed_rro_event(dev, skb);
+ 		break;
++	case MCU_UNI_EVENT_PS_SYNC:
++		mt7996_mcu_rx_ps_sync(dev, skb);
++		break;
+ 	default:
+ 		break;
+ 	}
+--- a/mt7996/mcu.h
++++ b/mt7996/mcu.h
+@@ -293,6 +293,39 @@ enum  {
+ 	UNI_WED_RRO_BA_SESSION_DELETE,
+ };
+ 
++struct mt7996_mcu_ps_sync_event {
++	struct mt7996_mcu_rxd rxd;
++
++	u8 bss_idx;
++	u8 __rsv[3];
++} __packed;
++
++struct mt7996_mcu_ps_client_info {
++	__le16 tag;
++	__le16 len;
++	u8 ps_bit;
++	u8 __rsv;
++	__le16 wlan_idx;
++	u8 buffer_size;
++	u8 __rsv2[3];
++} __packed;
++
++struct mt7996_mcu_ps_multi_client_info {
++	__le16 tag;
++	__le16 len;
++	__le16 sta_cnt;
++	__le16 sta_ps_info[];
++} __packed;
++
++#define MT7996_PS_MULTI_WCID	GENMASK(10, 0)
++#define MT7996_PS_MULTI_PS_BIT	BIT(15)
++
++enum {
++	UNI_PS_CLIENT_INFO = 0,
++	UNI_PS_MULTI_CLIENT_INFO = 1,
++	UNI_PS_MULTI_CLIENT_INFO_BITMAP = 2,
++};
++
+ struct mt7996_mcu_thermal_notify {
+ 	struct mt7996_mcu_rxd rxd;
+ 
+--- a/mt7996/mmio.c
++++ b/mt7996/mmio.c
+@@ -822,7 +822,8 @@ struct mt7996_dev *mt7996_mmio_probe(struct device *pdev,
+ 		.link_data_size = sizeof(struct mt7996_vif_link),
+ 		.drv_flags = MT_DRV_TXWI_NO_FREE |
+ 			     MT_DRV_AMSDU_OFFLOAD |
+-			     MT_DRV_HW_MGMT_TXQ,
++			     MT_DRV_HW_MGMT_TXQ |
++			     MT_DRV_HW_PS_BUFFERING,
+ 		.survey_flags = SURVEY_INFO_TIME_TX |
+ 				SURVEY_INFO_TIME_RX |
+ 				SURVEY_INFO_TIME_BSS_RX,
+--- a/tx.c
++++ b/tx.c
+@@ -267,6 +267,21 @@ void __mt76_tx_complete_skb(struct mt76_dev *dev, u16 wcid_idx, struct sk_buff *
+ 	wcid = __mt76_wcid_ptr(dev, wcid_idx);
+ 	mt76_tx_check_non_aql(dev, wcid, skb);
+ 
++	if (wcid && (dev->drv->drv_flags & MT_DRV_HW_PS_BUFFERING) &&
++	    test_bit(MT_WCID_FLAG_PS, &wcid->flags)) {
++		struct ieee80211_sta *sta = wcid_to_sta(wcid);
++
++		if (sta) {
++			struct ieee80211_hw *hw = mt76_phy_hw(dev, wcid->phy_idx);
++			int i;
++
++			for (i = 0; i < ARRAY_SIZE(sta->txq); i++)
++				if (sta->txq[i])
++					ieee80211_schedule_txq(hw, sta->txq[i]);
++			mt76_worker_schedule(&dev->tx_worker);
++		}
++	}
++
+ #ifdef CONFIG_NL80211_TESTMODE
+ 	if (mt76_is_testmode_skb(dev, skb, &hw)) {
+ 		struct mt76_phy *phy = hw->priv;
+@@ -401,7 +416,7 @@ mt76_txq_dequeue(struct mt76_phy *phy, struct mt76_txq *mtxq)
+ 
+ static void
+ mt76_queue_ps_skb(struct mt76_phy *phy, struct ieee80211_sta *sta,
+-		  struct sk_buff *skb, bool last)
++		  struct sk_buff *skb, bool last, bool more_data)
+ {
+ 	struct mt76_wcid *wcid = (struct mt76_wcid *)sta->drv_priv;
+ 	struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
+@@ -411,10 +426,29 @@ mt76_queue_ps_skb(struct mt76_phy *phy, struct ieee80211_sta *sta,
+ 		info->flags |= IEEE80211_TX_STATUS_EOSP |
+ 			       IEEE80211_TX_CTL_REQ_TX_STATUS;
+ 
+-	mt76_skb_set_moredata(skb, !last);
++	mt76_skb_set_moredata(skb, !last || more_data);
+ 	__mt76_tx_queue_skb(phy, MT_TXQ_PSD, skb, wcid, sta, NULL);
+ }
+ 
++static bool
++mt76_ps_tids_pending(struct ieee80211_sta *sta, u16 tids)
++{
++	int i;
++
++	for (i = 0; tids; i++, tids >>= 1) {
++		unsigned long frames, bytes;
++
++		if (!(tids & 1) || !sta->txq[i])
++			continue;
++
++		ieee80211_txq_get_depth(sta->txq[i], &frames, &bytes);
++		if (frames)
++			return true;
++	}
++
++	return false;
++}
++
+ void
+ mt76_release_buffered_frames(struct ieee80211_hw *hw, struct ieee80211_sta *sta,
+ 			     u16 tids, int nframes,
+@@ -425,6 +459,7 @@ mt76_release_buffered_frames(struct ieee80211_hw *hw, struct ieee80211_sta *sta,
+ 	struct mt76_dev *dev = phy->dev;
+ 	struct sk_buff *last_skb = NULL;
+ 	struct mt76_queue *hwq = phy->q_tx[MT_TXQ_PSD];
++	u16 release_tids = tids;
+ 	int i;
+ 
+ 	spin_lock_bh(&hwq->lock);
+@@ -443,14 +478,16 @@ mt76_release_buffered_frames(struct ieee80211_hw *hw, struct ieee80211_sta *sta,
+ 
+ 			nframes--;
+ 			if (last_skb)
+-				mt76_queue_ps_skb(phy, sta, last_skb, false);
++				mt76_queue_ps_skb(phy, sta, last_skb, false,
++						  false);
+ 
+ 			last_skb = skb;
+ 		} while (nframes);
+ 	}
+ 
+ 	if (last_skb) {
+-		mt76_queue_ps_skb(phy, sta, last_skb, true);
++		more_data |= mt76_ps_tids_pending(sta, release_tids);
++		mt76_queue_ps_skb(phy, sta, last_skb, true, more_data);
+ 		dev->queue_ops->kick(dev, hwq);
+ 	} else {
+ 		ieee80211_sta_eosp(sta);
+@@ -480,8 +517,12 @@ mt76_txq_send_burst(struct mt76_phy *phy, struct mt76_queue *q,
+ 	bool stop = false;
+ 	int idx;
+ 
+-	if (test_bit(MT_WCID_FLAG_PS, &wcid->flags))
+-		return 0;
++	if (test_bit(MT_WCID_FLAG_PS, &wcid->flags)) {
++		if (!(dev->drv->drv_flags & MT_DRV_HW_PS_BUFFERING))
++			return 0;
++		if (ieee80211_txq_aql_pending(phy->hw, txq))
++			return 0;
++	}
+ 
+ 	if (atomic_read(&wcid->non_aql_packets) >= MT_MAX_NON_AQL_PKT)
+ 		return 0;
+@@ -501,6 +542,9 @@ mt76_txq_send_burst(struct mt76_phy *phy, struct mt76_queue *q,
+ 	if (idx < 0)
+ 		return idx;
+ 
++	if (test_bit(MT_WCID_FLAG_PS, &wcid->flags))
++		goto out;
++
+ 	do {
+ 		if (test_bit(MT76_RESET, &phy->state) || phy->offchannel)
+ 			break;
+@@ -526,6 +570,7 @@ mt76_txq_send_burst(struct mt76_phy *phy, struct mt76_queue *q,
+ 		n_frames++;
+ 	} while (1);
+ 
++out:
+ 	spin_lock(&q->lock);
+ 	dev->queue_ops->kick(dev, q);
+ 	spin_unlock(&q->lock);
+@@ -552,10 +597,7 @@ mt76_txq_schedule_list(struct mt76_phy *phy, enum mt76_txq_id qid)
+ 
+ 		mtxq = (struct mt76_txq *)txq->drv_priv;
+ 		wcid = __mt76_wcid_ptr(dev, mtxq->wcid);
+-		if (!wcid || test_bit(MT_WCID_FLAG_PS, &wcid->flags))
+-			continue;
+-
+-		if (atomic_read(&wcid->non_aql_packets) >= MT_MAX_NON_AQL_PKT)
++		if (!wcid)
+ 			continue;
+ 
+ 		phy = mt76_dev_phy(dev, wcid->phy_idx);
+@@ -563,6 +605,36 @@ mt76_txq_schedule_list(struct mt76_phy *phy, enum mt76_txq_id qid)
+ 			continue;
+ 
+ 		q = phy->q_tx[qid];
++
++		if (test_bit(MT_WCID_FLAG_PS, &wcid->flags)) {
++			if (!(dev->drv->drv_flags & MT_DRV_HW_PS_BUFFERING))
++				continue;
++
++			if (!mt76_txq_stopped(q))
++				n_frames = mt76_txq_send_burst(phy, q, mtxq, wcid);
++
++			if (unlikely(n_frames < 0))
++				return n_frames;
++
++			/*
++			 * Keep the station in the airtime scheduler only while it
++			 * makes progress or the shared queue is stopped. A PS
++			 * station that cannot be drained consumes no airtime, so
++			 * its DRR deficit never goes negative and returning it here
++			 * would pin it at the head of the device-wide active_txqs
++			 * list, starving all other stations on every band. Leave it
++			 * unscheduled instead and let mt76_tx_complete_skb() re-arm
++			 * it once a buffered frame completes.
++			 */
++			if (n_frames > 0 || mt76_txq_stopped(q))
++				ieee80211_return_txq(phy->hw, txq, false);
++
++			ret += n_frames;
++			continue;
++		}
++
++		if (atomic_read(&wcid->non_aql_packets) >= MT_MAX_NON_AQL_PKT)
++			continue;
+ 		if (dev->queue_ops->tx_cleanup &&
+ 		    q->queued + 2 * MT_TXQ_FREE_THR >= q->ndesc) {
+ 			dev->queue_ops->tx_cleanup(dev, q, false);
+@@ -768,6 +840,33 @@ void mt76_stop_tx_queues(struct mt76_phy *phy, struct ieee80211_sta *sta,
+ }
+ EXPORT_SYMBOL_GPL(mt76_stop_tx_queues);
+ 
++void mt76_sta_ps_transition(struct mt76_dev *dev, struct mt76_wcid *wcid,
++			    bool ps)
++{
++	struct ieee80211_sta *sta;
++	struct ieee80211_hw *hw;
++	int i;
++
++	if (ps) {
++		set_bit(MT_WCID_FLAG_PS, &wcid->flags);
++		mt76_worker_schedule(&dev->tx_worker);
++		return;
++	}
++
++	clear_bit(MT_WCID_FLAG_PS, &wcid->flags);
++
++	sta = wcid_to_sta(wcid);
++	if (!sta)
++		return;
++
++	hw = mt76_phy_hw(dev, wcid->phy_idx);
++	for (i = 0; i < ARRAY_SIZE(sta->txq); i++)
++		if (sta->txq[i])
++			ieee80211_schedule_txq(hw, sta->txq[i]);
++	mt76_worker_schedule(&dev->tx_worker);
++}
++EXPORT_SYMBOL_GPL(mt76_sta_ps_transition);
++
+ void mt76_wake_tx_queue(struct ieee80211_hw *hw, struct ieee80211_txq *txq)
+ {
+ 	struct mt76_phy *phy = hw->priv;

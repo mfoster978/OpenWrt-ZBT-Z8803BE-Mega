@@ -34,6 +34,12 @@ for radio in $(uci -q show wireless | sed -nE 's/^wireless\.([^.]+)=wifi-device$
 	uci -q delete "wireless.${radio}.txpower" 2>/dev/null
 	uci -q delete "wireless.${radio}.min_tx_power" 2>/dev/null
 
+	if [ "$band" = "2g" ]; then
+		# OpenWrt defaults this off even with HT20/NOHT, which excludes the
+		# 802.11b rates required by some older camera and DVR chipsets.
+		uci -q set "wireless.${radio}.legacy_rates=1"
+	fi
+
 	if [ "$band" = "6g" ]; then
 		# hostapd 6 GHz regulatory power type 2 = very low power (VLP).
 		uci -q set "wireless.${radio}.reg_power_type=2"
@@ -46,7 +52,7 @@ done
 
 [ "$changed" -eq 0 ] && exit 0
 uci -q commit wireless
-logger -t zbt-wifi 'applied US defaults; 2.4/5 GHz auto power and 6 GHz 14 dBm VLP ceiling'
+logger -t zbt-wifi 'applied US defaults; 2.4 GHz legacy rates, 2.4/5 GHz auto power and 6 GHz 14 dBm VLP ceiling'
 
 # UCI defaults run before netifd starts. Do not queue a wireless reload here:
 # doing so can collide with the first network bring-up and temporarily strand

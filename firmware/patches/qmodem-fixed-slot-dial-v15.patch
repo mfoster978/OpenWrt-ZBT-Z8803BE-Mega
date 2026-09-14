@@ -1,0 +1,27 @@
+--- a/application/qmodem/files/usr/share/qmodem/modem_dial.sh
++++ b/application/qmodem/files/usr/share/qmodem/modem_dial.sh
+@@ -1617,11 +1617,19 @@ case "$2" in
+         update_config
+         hang;;
+     "dial")
+-        case "$state" in
+-            "disabled")
+-                debug_subject="modem_hang"
+-                hang;;
+-            *)
++        case "$modem_config" in
++            # Fixed Mega slots use enable_dial as the administrative switch.
++            # A stale discovery state must not turn an automatic retry into a
++            # hang after the exact USB/netdev/AT-port worker proved readiness.
++            4_1|2_1)
+                 dial;;
++            *)
++                case "$state" in
++                    "disabled")
++                        debug_subject="modem_hang"
++                        hang;;
++                    *)
++                        dial;;
++                esac;;
+         esac
+ esac

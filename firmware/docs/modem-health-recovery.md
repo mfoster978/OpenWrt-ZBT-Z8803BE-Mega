@@ -83,6 +83,12 @@ published to netifd. The startup worker still requires the exact physical USB
 root, netdev and AT port before dialing; clearing `enable_dial` still stops the
 slot and is never overridden.
 
+The final QModem command dispatch follows the same rule. Earlier Mega images
+fixed the readiness checks but left the inherited end-of-script `state=disabled`
+branch in place, so a supervised `dial` retry could still execute `hang` after
+readiness had succeeded. Fixed Modem 1 and Modem 2 slots now dispatch that dial;
+unrelated dynamically discovered QModem sections retain the inherited behavior.
+
 Automatic adaptive SA/NSA evaluation is explicit opt-in and additionally
 requires six consecutive direct-health successes and no QMI-loss/recovery
 marker. It cannot test or write a radio mode during the unstable period

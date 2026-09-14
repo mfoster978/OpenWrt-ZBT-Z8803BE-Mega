@@ -59,7 +59,7 @@ fi
 # Reverse only our exact known patches. Do not reset an entire checkout or
 # discard unrelated local edits while preparing a cached build.
 if ! git -C feeds/qmodem diff --quiet; then
-  for patch_name in qmodem-fixed-slot-state-v14.patch qmodem-adaptive-safety-v13.patch qmodem-netifd-disabled-v12.patch qmodem-netifd-arming-v11.patch qmodem-netifd-serialization-v10.patch qmodem-health-v9.patch qmodem-adaptive-v8.patch qmodem-session-lifecycle-v7.patch qmodem-radio-rpc-v6.patch qmodem-at-transport-v6.patch qmodem-connectivity-v5.patch qmodem-mega-policy-ui.patch qmodem-performance-ui.patch qmodem-5g-deployment.patch qmodem-cell-discovery.patch qmodem-dual-runtime.patch; do
+  for patch_name in qmodem-fixed-slot-dial-v15.patch qmodem-fixed-slot-state-v14.patch qmodem-adaptive-safety-v13.patch qmodem-netifd-disabled-v12.patch qmodem-netifd-arming-v11.patch qmodem-netifd-serialization-v10.patch qmodem-health-v9.patch qmodem-adaptive-v8.patch qmodem-session-lifecycle-v7.patch qmodem-radio-rpc-v6.patch qmodem-at-transport-v6.patch qmodem-connectivity-v5.patch qmodem-mega-policy-ui.patch qmodem-performance-ui.patch qmodem-5g-deployment.patch qmodem-cell-discovery.patch qmodem-dual-runtime.patch; do
     stack_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/$patch_name"
     # --force disables GNU patch's automatic reversal guessing. In batch
     # mode alone an absent patch can be applied while asking to reverse it.
@@ -165,6 +165,7 @@ patch --batch --fuzz=0 --forward -p1 -d feeds/qmodem < "$(dirname "${FILES_OVERL
 patch --batch --fuzz=0 --forward -p1 -d feeds/qmodem < "$(dirname "${FILES_OVERLAY_DIR}")/patches/qmodem-netifd-disabled-v12.patch"
 patch --batch --fuzz=0 --forward -p1 -d feeds/qmodem < "$(dirname "${FILES_OVERLAY_DIR}")/patches/qmodem-adaptive-safety-v13.patch"
 patch --batch --fuzz=0 --forward -p1 -d feeds/qmodem < "$(dirname "${FILES_OVERLAY_DIR}")/patches/qmodem-fixed-slot-state-v14.patch"
+patch --batch --fuzz=0 --forward -p1 -d feeds/qmodem < "$(dirname "${FILES_OVERLAY_DIR}")/patches/qmodem-fixed-slot-dial-v15.patch"
 for apn in broadband NXTGENPHONE ENHANCEDPHONE firstnet-broadband fast.t-mobile.com vzwinternet h2g2 h2g2-t usccinternet; do
   [ "$(grep -Fo "o.value('$apn'" feeds/qmodem/luci/luci-app-qmodem-next/htdocs/luci-static/resources/view/qmodem/network_config.js | wc -l)" -eq 2 ] || {
     echo "US APN preset is not present for both QModem SIM selectors: $apn" >&2; exit 3;
@@ -211,6 +212,24 @@ hostapd_mlo_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/hostapd-mlo-interop
 hostapd_mlo_patch_target=package/network/services/hostapd/patches/804-zbt-mlo-interoperability.patch
 if ! cmp -s "$hostapd_mlo_patch" "$hostapd_mlo_patch_target"; then
   cp "$hostapd_mlo_patch" "$hostapd_mlo_patch_target"
+fi
+# The pinned 2026-03-19 mt76 snapshot predates upstream MT7996 hardware power-
+# save buffering support. Without it, some embedded clients complete WPA but
+# their frames can remain stranded while the station is asleep. Backport only
+# the reviewed PS/TIM fixes against the exact PKG_SOURCE_VERSION above.
+mt76_ps_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/mt76-mt7996-ps-buffering.patch"
+mt76_ps_patch_target=package/kernel/mt76/patches/999-zbt-mt7996-ps-buffering.patch
+mkdir -p "$(dirname "$mt76_ps_patch_target")"
+if ! cmp -s "$mt76_ps_patch" "$mt76_ps_patch_target"; then
+  cp "$mt76_ps_patch" "$mt76_ps_patch_target"
+fi
+# mt76's throttle uses the paired mac80211 AQL query that entered upstream
+# after the pinned backports 6.18.7 archive. Backport that one exported helper
+# with this archive's existing broadcast-field name.
+mac80211_aql_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/mac80211-aql-pending.patch"
+mac80211_aql_patch_target=package/kernel/mac80211/patches/subsys/999-zbt-aql-pending.patch
+if ! cmp -s "$mac80211_aql_patch" "$mac80211_aql_patch_target"; then
+  cp "$mac80211_aql_patch" "$mac80211_aql_patch_target"
 fi
 # Add LED callbacks to the pinned MT7988 Ethernet PHY driver before the kernel
 # is prepared. The kernel version, modem drivers and power/SIM pins stay pinned.
@@ -384,6 +403,8 @@ make package/feeds/qmodem/tom_modem/clean
 make package/feeds/qmodem/luci-app-qmodem-next/clean
 make package/luci-app-mlo/clean
 make package/network/services/hostapd/clean
+make package/kernel/mac80211/clean
+make package/kernel/mt76/clean
 make package/feeds/luci/luci-app-mwan3/clean
 make package/feeds/packages/mwan3/clean
 make package/firmware/wireless-regdb/clean
@@ -478,6 +499,13 @@ make tools/install -j"${HOST_MAKE_JOBS}" V=s
 make toolchain/install -j"${HOST_MAKE_JOBS}" V=s
 make package/feeds/packages/golang-bootstrap/host/compile -j1 V=s
 make -j"${FINAL_MAKE_JOBS}" V=s
+
+mt76_build_source="$(find build_dir/target-* -type f -path '*/mt76-*/mt7996/mmio.c' -print -quit)"
+if [[ -z "$mt76_build_source" ]] ||
+   ! grep -Fq 'MT_DRV_HW_PS_BUFFERING' "$mt76_build_source"; then
+  echo 'Built MT7996 source does not contain the reviewed PS buffering backport' >&2
+  exit 4
+fi
 
 manifest="$(find "bin/targets/${target_main}/${SUBTARGET}" -maxdepth 1 -type f -name "*zbt-z8803be*.manifest" -print -quit)"
 if [[ -z "${manifest}" ]]; then
@@ -708,6 +736,11 @@ grep -Fq 'zbt_qmi_session "$@"' "${rootfs_dir}/usr/share/qmodem/modem_dial.sh" |
 grep -Fq '4_1|2_1) state_fullfill=1' "${rootfs_dir}/usr/share/qmodem/modem_dial.sh" || {
   echo 'QModem fixed-slot discovery-state recovery is missing from the image' >&2; exit 4;
 }
+grep -Fq 'case "$modem_config" in' "${rootfs_dir}/usr/share/qmodem/modem_dial.sh" &&
+grep -Fq 'A stale discovery state must not turn an automatic retry into a' \
+  "${rootfs_dir}/usr/share/qmodem/modem_dial.sh" || {
+  echo 'QModem fixed-slot final dial dispatch is still gated by stale discovery state' >&2; exit 4;
+}
 grep -Fq 'fixed modem slot $slot not enumerated yet' "${rootfs_dir}/etc/init.d/qmodem_init" || {
   echo 'QModem late-enumeration guard is missing from the image' >&2; exit 4;
 }
@@ -722,6 +755,10 @@ grep -Fq 'procd_set_param respawn 3600 5 0' \
 grep -Fq 'configured-ap-not-running phase=boot' \
   "${rootfs_dir}/usr/sbin/zbt-wifi-firstboot" || exit 4
 grep -Fq '[ -d "$1" ] || exit 1' "${rootfs_dir}/etc/uci-defaults/72-zbt-z8803be-wifi" || exit 4
+grep -Fq 'wireless.${radio}.legacy_rates=1' \
+  "${rootfs_dir}/etc/uci-defaults/73-zbt-us-wifi-defaults" || {
+  echo 'Kept-configuration 2.4 GHz compatibility migration is missing' >&2; exit 4;
+}
 if grep -q '/sbin/wifi reload' "${rootfs_dir}/etc/uci-defaults/72-zbt-z8803be-wifi"; then
   echo 'Unsafe first-boot wireless reload survived into the image' >&2; exit 4;
 fi

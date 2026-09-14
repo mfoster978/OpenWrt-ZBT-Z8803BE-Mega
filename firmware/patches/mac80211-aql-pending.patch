@@ -1,0 +1,47 @@
+--- a/include/net/mac80211.h
++++ b/include/net/mac80211.h
+@@ -6633,6 +6633,17 @@ bool
+ ieee80211_txq_airtime_check(struct ieee80211_hw *hw, struct ieee80211_txq *txq);
+ 
+ /**
++ * ieee80211_txq_aql_pending - get pending AQL airtime for a txq
++ *
++ * @hw: pointer obtained from ieee80211_alloc_hw()
++ * @txq: pointer obtained from station or virtual interface
++ *
++ * Return: pending airtime (in usec) for the given txq.
++ */
++u32 ieee80211_txq_aql_pending(struct ieee80211_hw *hw,
++                              struct ieee80211_txq *txq);
++
++/**
+  * ieee80211_iter_keys - iterate keys programmed into the device
+  * @hw: pointer obtained from ieee80211_alloc_hw()
+  * @vif: virtual interface to iterate, may be %NULL for all
+--- a/net/mac80211/tx.c
++++ b/net/mac80211/tx.c
+@@ -4182,6 +4182,24 @@ bool ieee80211_txq_airtime_check(struct ieee80211_hw *hw,
+ }
+ EXPORT_SYMBOL(ieee80211_txq_airtime_check);
+ 
++u32 ieee80211_txq_aql_pending(struct ieee80211_hw *hw,
++                              struct ieee80211_txq *txq)
++{
++	struct ieee80211_local *local = hw_to_local(hw);
++	struct sta_info *sta;
++
++	if (unlikely(txq->tid == IEEE80211_NUM_TIDS))
++		return 0;
++
++	if (!txq->sta)
++		return atomic_read(&local->aql_bc_pending_airtime);
++
++	sta = container_of(txq->sta, struct sta_info, sta);
++
++	return atomic_read(&sta->airtime[txq->ac].aql_tx_pending);
++}
++EXPORT_SYMBOL(ieee80211_txq_aql_pending);
++
+ static bool
+ ieee80211_txq_schedule_airtime_check(struct ieee80211_local *local, u8 ac)
+ {

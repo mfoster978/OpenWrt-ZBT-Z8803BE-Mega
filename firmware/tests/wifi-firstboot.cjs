@@ -44,6 +44,9 @@ uci() {
     'factory 2.4 GHz radio uses 20 MHz 802.11n compatibility mode');
   assert.doesNotMatch(script.replace(/^#.*$/gm, ''), /2g\).*htmode=EHT/,
     'factory 2.4 GHz radio must not require an EHT-capable client');
+  const usDefaults = fs.readFileSync(path.join(root, 'firmware/files/etc/uci-defaults/73-zbt-us-wifi-defaults'), 'utf8');
+  assert.match(usDefaults, /\[ "\$band" = "2g" \][\s\S]*legacy_rates=1/,
+    'settings-preserving upgrades enable 802.11b rates only on the 2.4 GHz radio');
   const late = fs.readFileSync(path.join(root, 'firmware/files/usr/sbin/zbt-wifi-firstboot'), 'utf8');
   assert.match(late, /ubus -t 2 list network\.wireless/);
   assert.match(late, /configured-ap-not-running phase=boot/);

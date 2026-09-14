@@ -70,6 +70,19 @@ grep -Fq 'hostapd_remove_hapd_iface' "$hostapd_mlo_patch"
 grep -Fq 'ap_sta_free_sta_profile(info);' "$hostapd_mlo_patch"
 grep -Fq 'hostapd_mlo_patch_target=package/network/services/hostapd/patches/804-zbt-mlo-interoperability.patch' \
   firmware/docker/build-openwrt.sh
+mt76_ps_patch=firmware/patches/mt76-mt7996-ps-buffering.patch
+test -s "$mt76_ps_patch"
+grep -Fq 'MT_DRV_HW_PS_BUFFERING' "$mt76_ps_patch"
+grep -Fq 'MCU_UNI_EVENT_PS_SYNC' "$mt76_ps_patch"
+grep -Fq 'mt76_ps_patch_target=package/kernel/mt76/patches/999-zbt-mt7996-ps-buffering.patch' \
+  firmware/docker/build-openwrt.sh
+grep -Fq 'make package/kernel/mt76/clean' firmware/docker/build-openwrt.sh
+mac80211_aql_patch=firmware/patches/mac80211-aql-pending.patch
+test -s "$mac80211_aql_patch"
+grep -Fq 'ieee80211_txq_aql_pending' "$mac80211_aql_patch"
+grep -Fq 'mac80211_aql_patch_target=package/kernel/mac80211/patches/subsys/999-zbt-aql-pending.patch' \
+  firmware/docker/build-openwrt.sh
+grep -Fq 'make package/kernel/mac80211/clean' firmware/docker/build-openwrt.sh
 test -s firmware/patches/luci-app-mwan3-route-metric.patch
 grep -Fq "uci.set('network', section_id, 'metric', value);" \
   firmware/patches/luci-app-mwan3-route-metric.patch
@@ -104,6 +117,7 @@ grep -Fq 'make package/feeds/luci/luci-base/clean' firmware/docker/build-openwrt
 # EEPROM minimum. The mobile-safe 6 GHz profile is VLP at 14 dBm EIRP.
 us_wifi_defaults=firmware/files/etc/uci-defaults/73-zbt-us-wifi-defaults
 grep -Fq 'wireless.${radio}.country=US' "$us_wifi_defaults"
+grep -Fq 'wireless.${radio}.legacy_rates=1' "$us_wifi_defaults"
 grep -Fq 'wireless.${radio}.reg_power_type=2' "$us_wifi_defaults"
 grep -Fq 'wireless.${radio}.country3=20' "$us_wifi_defaults"
 if grep -Eq '(^|/)(sbin/)?wifi[[:space:]]+reload|zbt-wifi-reload-deferred' \
@@ -375,7 +389,7 @@ grep -Fq "app.search = 'wsPort=match&wsEndpoint=" \
 if grep -Eq "getRouterActivation|method: 'activation'|Sign in this router" firmware/files/usr/share/zbt/speedify-luci-wrapper.js; then
   echo 'Speedify must use its native sign-in UI' >&2; exit 1
 fi
-for patch_name in qmodem-at-transport-v6.patch qmodem-radio-rpc-v6.patch zbt-qmodem-rpc-firstboot.patch qmodem-session-lifecycle-v7.patch qmodem-adaptive-safety-v13.patch qmodem-fixed-slot-state-v14.patch zbt-wifi-firstboot-v7.patch; do
+for patch_name in qmodem-at-transport-v6.patch qmodem-radio-rpc-v6.patch zbt-qmodem-rpc-firstboot.patch qmodem-session-lifecycle-v7.patch qmodem-adaptive-safety-v13.patch qmodem-fixed-slot-state-v14.patch qmodem-fixed-slot-dial-v15.patch zbt-wifi-firstboot-v7.patch; do
   test -s "firmware/patches/$patch_name"
   grep -Fq "$patch_name" firmware/docker/build-openwrt.sh
 done
