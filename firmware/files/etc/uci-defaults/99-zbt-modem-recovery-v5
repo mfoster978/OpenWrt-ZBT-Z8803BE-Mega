@@ -1,0 +1,34 @@
+#!/bin/sh
+# Correct the affected Mega watchdog/runtime combination once on upgrade. The
+# preceding release could tear down a healthy CM session on a transient route
+# publication gap, then accept an unverified procd registration as recovery.
+# Re-arm the requested defaults for both physical slots; later user changes
+# remain authoritative after recovery_v5 is recorded.
+[ "$(uci -q get modem_watchdog.global.recovery_v5 2>/dev/null)" = 1 ] && exit 0
+
+uci -q get modem_watchdog.global >/dev/null 2>&1 || uci set modem_watchdog.global=modem_watchdog
+uci set modem_watchdog.global.enabled=1
+uci set modem_watchdog.global.actions_enabled=1
+uci set modem_watchdog.global.interval_seconds=20
+uci set modem_watchdog.global.ping_fail_threshold=3
+uci set modem_watchdog.global.cooldown_seconds=180
+uci set modem_watchdog.global.redial_verify_seconds=60
+uci set modem_watchdog.global.boot_grace_seconds=60
+
+for pair in modem1:4_1 modem2:2_1; do
+	key=${pair%:*}
+	section=${pair#*:}
+	uci -q get "modem_watchdog.$key" >/dev/null 2>&1 || uci set "modem_watchdog.$key=modem"
+	uci set "modem_watchdog.$key.section=$section"
+	uci set "modem_watchdog.$key.enabled=1"
+	uci set "modem_watchdog.$key.action=power_cycle"
+	uci set "modem_watchdog.$key.redial_attempts=1"
+	uci -q get "qmodem.$section" >/dev/null 2>&1 && uci set "qmodem.$section.monitor_enabled=0"
+done
+
+uci set modem_watchdog.global.recovery_v5=1
+uci commit modem_watchdog
+uci -q commit qmodem
+/etc/init.d/modem_watchdog enable
+/etc/init.d/modem_watchdog restart >/dev/null 2>&1 || true
+exit 0

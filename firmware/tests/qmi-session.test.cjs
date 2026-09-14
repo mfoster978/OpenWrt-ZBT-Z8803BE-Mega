@@ -103,10 +103,11 @@ test('QMI connectivity recovery is delegated, never an address or stale tracker 
   assert.doesNotMatch(fixture({ MODE: 'stuck', ADDR4: '0', ADDR6: '0' }).calls, /failed for 120/);
   assert.doesNotMatch(fixture({ ADDR4: '0', ADDR6: '1' }).calls, /failed for 120/);
 });
-test('QMI restarts its own session after an established kernel data path disappears', () => {
+test('QMI never tears down a live CM because netifd temporarily loses its route', () => {
   const f = fixture({ MODE: 'route_loss' });
-  assert.match(f.calls, /action=session-restart reason=kernel-data-path-lost misses=3/);
+  assert.doesNotMatch(f.calls, /kernel-data-path-lost/);
   assert.match(f.out, /result=1/);
+  assert.match(f.calls, /child=/);
   assert.ok(fs.existsSync(path.join(f.dir, 'watchdog/4_1.qmi-lost')));
   assert.doesNotMatch(f.calls, /wwan3|down 2_1|network restart/);
 });

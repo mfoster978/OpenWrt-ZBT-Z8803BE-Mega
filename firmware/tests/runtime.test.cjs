@@ -756,7 +756,7 @@ test('watchdog has independent slot workers and a non-blocking MWAN coordinator'
   const init = file('firmware/feeds/luci-app-modem-watchdog/root/etc/init.d/modem_watchdog');
   const worker = file('firmware/feeds/luci-app-modem-watchdog/root/usr/sbin/modem-watchdog');
   const recovery = file('firmware/files/usr/lib/zbt/modem-recovery.sh');
-  const migration = file('firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v4');
+  const migration = file('firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v5');
   assert.match(init, /add_worker 4_1[\s\S]*add_worker 2_1[\s\S]*add_worker coordinator/);
   assert.match(init, /procd_set_param command "\$PROG" "\$section"/);
   assert.match(worker, /watch_slot\(\)[\s\S]*zbt_health_probe "\$section"[\s\S]*zbt_recovery_check "\$section" "\$key"/);
@@ -765,6 +765,7 @@ test('watchdog has independent slot workers and a non-blocking MWAN coordinator'
   assert.match(worker, /action=recovery-gate/);
   assert.doesNotMatch(worker.slice(worker.indexOf('watch_slot()'), worker.indexOf('coordinate()')), /zbt-mwan-apply|zbt-mwan-failback/);
   assert.match(recovery, /Register the selected slot immediately[\s\S]*qmodem_network dial "\$section"/);
+  assert.match(recovery, /zbt_recovery_worker_pid[\s\S]*result=worker-registered/);
   assert.doesNotMatch(recovery.slice(recovery.indexOf('zbt_recovery_action()'), recovery.indexOf('zbt_recovery_resume()')), /newindex|\[ "\$tries" -lt 60 \]/);
   assert.match(migration, /modem_watchdog\.global\.enabled=1/);
   assert.match(migration, /modem_watchdog\.global\.actions_enabled=1/);

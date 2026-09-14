@@ -223,6 +223,14 @@ mkdir -p "$(dirname "$mt76_ps_patch_target")"
 if ! cmp -s "$mt76_ps_patch" "$mt76_ps_patch_target"; then
   cp "$mt76_ps_patch" "$mt76_ps_patch_target"
 fi
+# Complete that backport with the later upstream EOSP and stale-station queue
+# fixes. These are especially important for embedded clients that reconnect or
+# use U-APSD on the 2.4 GHz radio.
+mt76_legacy_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/mt76-mt7996-legacy-client-followup.patch"
+mt76_legacy_patch_target=package/kernel/mt76/patches/999-zbt-mt7996-ps-zlegacy-followup.patch
+if ! cmp -s "$mt76_legacy_patch" "$mt76_legacy_patch_target"; then
+  cp "$mt76_legacy_patch" "$mt76_legacy_patch_target"
+fi
 # mt76's throttle uses the paired mac80211 AQL query that entered upstream
 # after the pinned backports 6.18.7 archive. Backport that one exported helper
 # with this archive's existing broadcast-field name.
@@ -637,6 +645,7 @@ required_overlay_files=(
   etc/uci-defaults/99-zbt-modem-recovery-v2
   etc/uci-defaults/99-zbt-modem-recovery-v3
   etc/uci-defaults/99-zbt-modem-recovery-v4
+  etc/uci-defaults/99-zbt-modem-recovery-v5
   usr/lib/zbt/5g-state.sh
   usr/lib/zbt/5g-adaptive.sh
   usr/lib/zbt/mwan-runtime.sh
@@ -720,14 +729,17 @@ done
 grep -Fq 'sleep 8' "${rootfs_dir}/usr/lib/zbt/modem-recovery.sh" || {
   echo 'RM551E GPIO recovery pulse is shorter than the validated interval' >&2; exit 4;
 }
-grep -Fq 'reason=kernel-data-path-lost' "${rootfs_dir}/usr/lib/zbt/qmi-session.sh" || {
-  echo 'QMI session route-loss recovery is missing from the image' >&2; exit 4;
+if grep -Fq 'kernel-data-path-lost' "${rootfs_dir}/usr/lib/zbt/qmi-session.sh"; then
+  echo 'QMI supervisor must not tear down a live CM during route publication gaps' >&2; exit 4;
+fi
+grep -Fq 'result=worker-registered' "${rootfs_dir}/usr/lib/zbt/modem-recovery.sh" || {
+  echo 'Watchdog recovery does not verify persistent QModem worker registration' >&2; exit 4;
 }
 grep -Fq 'Automatic preferred — modem/network selection (recommended)' \
   "${rootfs_dir}/www/luci-static/resources/view/qmodem/config_advanced.js" || exit 4
 test -x "${rootfs_dir}/usr/sbin/zbt-speedify-guard" &&
   test -x "${rootfs_dir}/etc/init.d/zbt-speedify-guard" || exit 4
-for overlay_file in usr/lib/zbt/mwan-reconcile.sh usr/sbin/zbt-mwan-apply usr/lib/zbt/5g-state.sh usr/lib/zbt/5g-adaptive.sh usr/lib/zbt/mwan-runtime.sh usr/sbin/zbt-mwan-failback usr/sbin/zbt-5g-adaptive etc/init.d/zbt-5g-adaptive etc/hotplug.d/iface/90-zbt-mwan-failback etc/uci-defaults/99-zbt-5g-adaptive-v1 etc/uci-defaults/99-zbt-5g-adaptive-v2 etc/uci-defaults/99-zbt-modem-recovery-v2 etc/uci-defaults/99-zbt-modem-recovery-v3 etc/uci-defaults/99-zbt-modem-recovery-v4 usr/lib/zbt/qmodem-5g.sh usr/lib/zbt/qmi-session.sh usr/lib/zbt/qmodem-start.sh usr/sbin/zbt-wifi-firstboot etc/init.d/zbt-wifi-firstboot etc/uci-defaults/71-zbt-wifi-firstboot usr/lib/zbt/mwan3-speed-metric.sh usr/libexec/rpcd/zbt.speedify usr/share/rpcd/acl.d/zbt-speedify.json usr/share/zbt/speedify-luci-wrapper.js usr/lib/zbt/speedify-routing.sh usr/sbin/zbt-speedify-guard etc/init.d/zbt-speedify-guard etc/uci-defaults/99-zbt-modem-route-v5 etc/uci-defaults/99-zbt-qmi-netifd-v11 etc/uci-defaults/99-zbt-qmi-netifd-v12 www/luci-static/resources/view/network/quick-wifi.js usr/share/luci/menu.d/zbt-quick-wifi.json usr/share/rpcd/acl.d/zbt-quick-wifi.json; do
+for overlay_file in usr/lib/zbt/mwan-reconcile.sh usr/sbin/zbt-mwan-apply usr/lib/zbt/5g-state.sh usr/lib/zbt/5g-adaptive.sh usr/lib/zbt/mwan-runtime.sh usr/sbin/zbt-mwan-failback usr/sbin/zbt-5g-adaptive etc/init.d/zbt-5g-adaptive etc/hotplug.d/iface/90-zbt-mwan-failback etc/uci-defaults/99-zbt-5g-adaptive-v1 etc/uci-defaults/99-zbt-5g-adaptive-v2 etc/uci-defaults/99-zbt-modem-recovery-v2 etc/uci-defaults/99-zbt-modem-recovery-v3 etc/uci-defaults/99-zbt-modem-recovery-v4 etc/uci-defaults/99-zbt-modem-recovery-v5 usr/lib/zbt/qmodem-5g.sh usr/lib/zbt/qmi-session.sh usr/lib/zbt/qmodem-start.sh usr/sbin/zbt-wifi-firstboot etc/init.d/zbt-wifi-firstboot etc/uci-defaults/71-zbt-wifi-firstboot usr/lib/zbt/mwan3-speed-metric.sh usr/libexec/rpcd/zbt.speedify usr/share/rpcd/acl.d/zbt-speedify.json usr/share/zbt/speedify-luci-wrapper.js usr/lib/zbt/speedify-routing.sh usr/sbin/zbt-speedify-guard etc/init.d/zbt-speedify-guard etc/uci-defaults/99-zbt-modem-route-v5 etc/uci-defaults/99-zbt-qmi-netifd-v11 etc/uci-defaults/99-zbt-qmi-netifd-v12 www/luci-static/resources/view/network/quick-wifi.js usr/share/luci/menu.d/zbt-quick-wifi.json usr/share/rpcd/acl.d/zbt-quick-wifi.json; do
   cmp "${FILES_OVERLAY_DIR}/${overlay_file}" "${rootfs_dir}/${overlay_file}" || exit 4
 done
 # Check the actual installed dialer and authoritative board defaults, not

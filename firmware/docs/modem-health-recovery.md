@@ -23,9 +23,10 @@ working family prevents a whole-modem reset. IPv4 and IPv6 are reported separate
 If a network blocks ICMP, configure suitable reachable targets before relying on
 automatic recovery. Signal strength and an assigned IP do not prove Internet.
 
-Default recovery settings are applied on fresh installs. A corrective v4
-migration also reapplies them once to affected kept configurations where the
-daemon was running but recovery permission had remained off:
+Default recovery settings are applied on fresh installs. Corrective migrations
+also reapply them once to affected kept configurations where recovery permission
+remained off or an accepted dial request failed to create a persistent worker.
+The current repair marker is v5:
 
 | Setting | Default |
 | --- | --- |
@@ -96,7 +97,7 @@ immediately after a modem reconnects. Automatic preferred performs no background
 evaluation or periodic radio write.
 
 The separate QModem monitor remains disabled so it cannot race the central
-watchdog. The corrective v4 migration restores central recovery once on an
+watchdog. The corrective v5 migration restores central recovery once on an
 affected upgrade; user opt-outs made afterward survive later upgrades and
 routing presets. Bridge-passthrough modems are not probed/reset for lacking a
 router WAN address.
@@ -111,15 +112,14 @@ refreshes only that family's modem tracker. No second DHCP client, permanent
 is introduced. IPv6 companions bind directly to the detected modem, not to an
 IPv4 parent that may never come up on an IPv6-only PDP.
 
-A living CM is no longer destroyed by a 120-second mwan3-offline timer. The
-watchdog independently tests the data path. A genuinely exited CM is cleaned
-up and reported to recovery, with only its own addresses/routes removed.
-After a session has successfully acquired a local address and default route,
-loss of every local address/route path for three consecutive five-second checks
-also ends only that session. Its persistent per-slot worker then redials it.
-This covers a live CM process left behind after netifd loses its route, without
-using another modem's health, a global network restart, or an Internet probe as
-the decision.
+A living CM is not destroyed by mwan3 state or by a transient netifd address or
+route publication gap. The QMI supervisor owns only its child-process lifetime
+and continues republishing the observed address and route while that child is
+alive. A genuinely exited CM is cleaned up and reported to recovery, with only
+its own addresses/routes removed. The central watchdog independently probes the
+physical data path and owns the bounded redial/GPIO escalation for a real outage.
+This prevents route-policy transitions from tearing down a healthy Modem 1 call
+seconds after it first comes online.
 
 ## IPv6 and Wi-Fi/LAN failback
 

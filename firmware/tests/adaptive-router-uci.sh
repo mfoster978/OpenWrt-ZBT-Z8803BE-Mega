@@ -159,6 +159,21 @@ uci commit modem_watchdog
 ( eval "$recovery_v4" )
 [ "$(uci get modem_watchdog.global.enabled)" = 0 ]
 [ "$(uci get modem_watchdog.modem2.action)" = none ]
+# v5 repairs the exact route-gap teardown / unverified-worker combination in
+# the affected release and therefore re-arms both slots once on upgrade.
+recovery_v5=$(sed '/^\/etc\/init.d\/modem_watchdog /d; /^exit 0$/d' "$MEGA_TEST_REPO/firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v5")
+eval "$recovery_v5"
+[ "$(uci get modem_watchdog.global.recovery_v5)" = 1 ]
+[ "$(uci get modem_watchdog.global.enabled)" = 1 ]
+[ "$(uci get modem_watchdog.global.actions_enabled)" = 1 ]
+[ "$(uci get modem_watchdog.modem1.action)" = power_cycle ]
+[ "$(uci get modem_watchdog.modem2.action)" = power_cycle ]
+uci set modem_watchdog.global.enabled=0
+uci set modem_watchdog.modem1.action=none
+uci commit modem_watchdog
+( eval "$recovery_v5" )
+[ "$(uci get modem_watchdog.global.enabled)" = 0 ]
+[ "$(uci get modem_watchdog.modem1.action)" = none ]
 [ "$(uci get mwan3.default_rule6.use_policy)" = failover6 ]
 [ "$(uci get mwan3.4_1v6.family)" = ipv6 ]
-echo 'PASS: actual ARM64 UCI repairs the affected disabled watchdog once, then preserves later opt-out and the separate IPv6 policy'
+echo 'PASS: actual ARM64 UCI repairs each affected watchdog generation once, then preserves later opt-out and the separate IPv6 policy'

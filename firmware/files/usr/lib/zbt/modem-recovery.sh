@@ -16,8 +16,15 @@ zbt_recovery_allowed() {
 	[ "$(zbt_recovery_get global.actions_enabled)" = 1 ] &&
 	[ "$(zbt_recovery_get "$key.enabled")" = 1 ]
 }
+zbt_recovery_worker_pid() {
+	local section="$1" pid
+	pid=$(ubus -t 5 call service list '{"name":"qmodem_network"}' 2>/dev/null |
+		jq -r --arg n "modem_$section" '.qmodem_network.instances[$n] | select(.running == true) | .pid // empty' 2>/dev/null)
+	case "$pid" in ''|*[!0-9]*|0|1) return 1 ;; esac
+	printf '%s\n' "$pid"
+}
 zbt_recovery_action() (
-	local section="$1" action="$2" config_section="$1" path pid tries=0 powered_off=0 owner rest
+	local section="$1" action="$2" config_section="$1" path pid tries=0 powered_off=0 owner rest registered=''
 	zbt_recovery_allowed "$section" || exit 1
 	exec 6>"$ZBT_RECOVERY_DIR/action.lock"
 	flock -n 6 || exit 75
@@ -75,7 +82,21 @@ zbt_recovery_action() (
 	# recovery silently give up before the modem completed USB enumeration.
 	zbt_recovery_allowed "$section" || exit 1
 	rm -f "$path"
-	if /etc/init.d/qmodem_network dial "$section" >/dev/null 2>&1; then exit 0; fi
+	# A zero exit from rc_procd only proves that the request was accepted. Verify
+	# that procd exposes a running persistent slot worker; retry registration a
+	# few times without waiting for slow USB enumeration or touching the peer.
+	tries=0
+	while [ "$tries" -lt 5 ]; do
+		/etc/init.d/qmodem_network dial "$section" >/dev/null 2>&1 || true
+		registered=$(zbt_recovery_worker_pid "$section" 2>/dev/null || true)
+		if [ -n "$registered" ]; then
+			logger -t modem-watchdog "slot=$section action=$action result=worker-registered pid=$registered"
+			exit 0
+		fi
+		tries=$((tries + 1))
+		[ "$tries" -ge 5 ] || sleep 1
+	done
+	logger -t modem-watchdog "slot=$section action=$action result=worker-registration-failed attempts=$tries"
 	printf '%s\n' "$owner" > "$path"
 	exit 1
 )

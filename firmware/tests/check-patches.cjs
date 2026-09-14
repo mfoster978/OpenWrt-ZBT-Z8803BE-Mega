@@ -11,7 +11,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'zbt-pinned-patches-'));
 const specs = [
   ['qmodem-firstboot', '0xFar5eer/openwrt25.12_ZBT_Z8803BE', 'edc738504fe8fae81eb15de967456204699b1830', 'zbt-qmodem-rpc-firstboot.patch', ''],
   ['qmodem', 'FUjr/QModem', 'a8b8a63e5b0853c79d2ad3f1ebbb673a724872bf', ['qmodem-dual-runtime.patch', 'qmodem-cell-discovery.patch', 'qmodem-5g-deployment.patch', 'qmodem-performance-ui.patch', 'qmodem-mega-policy-ui.patch', 'qmodem-connectivity-v5.patch', 'qmodem-at-transport-v6.patch', 'qmodem-radio-rpc-v6.patch', 'qmodem-session-lifecycle-v7.patch', 'qmodem-adaptive-v8.patch', 'qmodem-health-v9.patch', 'qmodem-netifd-serialization-v10.patch', 'qmodem-netifd-arming-v11.patch', 'qmodem-netifd-disabled-v12.patch', 'qmodem-adaptive-safety-v13.patch', 'qmodem-fixed-slot-state-v14.patch', 'qmodem-fixed-slot-dial-v15.patch'], ''],
-  ['mt76', 'openwrt/mt76', '39c960c3ada558b4c2e7915772483d3731573d09', 'mt76-mt7996-ps-buffering.patch', ''],
+  ['mt76', 'openwrt/mt76', '39c960c3ada558b4c2e7915772483d3731573d09', ['mt76-mt7996-ps-buffering.patch', 'mt76-mt7996-legacy-client-followup.patch'], ''],
   ['wifi-firstboot', '0xFar5eer/openwrt25.12_ZBT_Z8803BE', 'edc738504fe8fae81eb15de967456204699b1830', 'zbt-wifi-firstboot-v7.patch', ''],
   ['packages', 'openwrt/packages', 'db3b315119519f9194dad8aa668aa40618df9b20', ['mwan3-speed-policy.patch', 'mwan3-mega-lifecycle.patch'], ''],
   ['mwan3-luci', 'openwrt/luci', 'a611522a2bfc24ca2625e8cd2fcc9404288532a6', 'luci-app-mwan3-route-metric.patch', ''],
@@ -174,6 +174,13 @@ ${dispatch}
         'an undrainable sleeping client cannot starve all radio queues');
       assert.match(tx, /more_data \|= mt76_ps_tids_pending/,
         'buffered-frame release preserves the more-data indication');
+      assert.match(tx, /IEEE80211_QOS_CTL_EOSP/,
+        'the final U-APSD frame closes the client service period on air');
+      assert.match(tx, /ieee80211_is_disassoc/,
+        'disassociation frames bypass stale per-station hardware queues');
+      const main = fs.readFileSync(path.join(tree, 'mt7996/main.c'), 'utf8');
+      assert.match(main, /wcid\.tx_info &= ~MT_WCID_TX_INFO_SET/,
+        'MT7996 clears stale station queue state before disconnect teardown');
     }
   }
   const result = run(process.execPath, ['--test', path.join(__dirname, 'mwan-reconcile.test.cjs'), path.join(__dirname, 'mwan-apply.test.cjs'), path.join(__dirname, 'modem-health.test.cjs'), path.join(__dirname, 'adaptive.test.cjs'), path.join(__dirname, 'speedify-routing.test.cjs'), path.join(__dirname, 'runtime.test.cjs'), path.join(__dirname, 'qmi-session.test.cjs'), path.join(__dirname, 'connectivity.test.cjs'), path.join(__dirname, 'led-labels.test.cjs'), path.join(__dirname, 'ttl.test.cjs'), path.join(__dirname, 'bands.test.cjs'), path.join(__dirname, 'band-ui.test.cjs'), path.join(__dirname, 'mlo-ui.test.cjs'), path.join(__dirname, 'quick-wifi-ui.test.cjs')], {

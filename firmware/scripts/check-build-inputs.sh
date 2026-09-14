@@ -20,6 +20,7 @@ for script in \
   firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v2 \
   firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v3 \
   firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v4 \
+  firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v5 \
   firmware/files/etc/hotplug.d/net/15-zbt-rndis-auto \
   firmware/files/etc/hotplug.d/usb/40-zbt-qmodem-autoenable \
   firmware/files/usr/lib/zbt/qmodem-start.sh \
@@ -35,12 +36,15 @@ done
 test -x firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v2
 test -x firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v3
 test -x firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v4
+test -x firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v5
 test -x firmware/files/etc/uci-defaults/99-zbt-5g-adaptive-v2
 grep -Fq 'redial_attempts=1' firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v2
 grep -Fq '/etc/init.d/modem_watchdog restart' firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v3
 grep -Fq 'modem_watchdog.global.actions_enabled=1' firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v4
 grep -Fq 'for pair in modem1:4_1 modem2:2_1' firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v4
 grep -Fq 'modem_watchdog.$key.action=power_cycle' firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v4
+grep -Fq 'modem_watchdog.global.actions_enabled=1' firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v5
+grep -Fq 'modem_watchdog.$key.action=power_cycle' firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v5
 grep -Fq 'zbt_5g_adaptive_opt_in' firmware/files/etc/uci-defaults/99-zbt-5g-adaptive-v2
 grep -Fq 'action=dialer-exited' firmware/files/usr/lib/zbt/qmodem-start.sh
 grep -Fq 'zbt-qmodem-session-start.lock' firmware/files/usr/lib/zbt/qmodem-start.sh
@@ -75,6 +79,12 @@ test -s "$mt76_ps_patch"
 grep -Fq 'MT_DRV_HW_PS_BUFFERING' "$mt76_ps_patch"
 grep -Fq 'MCU_UNI_EVENT_PS_SYNC' "$mt76_ps_patch"
 grep -Fq 'mt76_ps_patch_target=package/kernel/mt76/patches/999-zbt-mt7996-ps-buffering.patch' \
+  firmware/docker/build-openwrt.sh
+mt76_legacy_patch=firmware/patches/mt76-mt7996-legacy-client-followup.patch
+test -s "$mt76_legacy_patch"
+grep -Fq 'IEEE80211_QOS_CTL_EOSP' "$mt76_legacy_patch"
+grep -Fq 'ieee80211_is_disassoc' "$mt76_legacy_patch"
+grep -Fq 'mt76_legacy_patch_target=package/kernel/mt76/patches/999-zbt-mt7996-ps-zlegacy-followup.patch' \
   firmware/docker/build-openwrt.sh
 grep -Fq 'make package/kernel/mt76/clean' firmware/docker/build-openwrt.sh
 mac80211_aql_patch=firmware/patches/mac80211-aql-pending.patch
@@ -236,8 +246,8 @@ grep -Fq '+flock' firmware/feeds/luci-app-modem-watchdog/Makefile
 grep -Fq 'action=worker result=started' firmware/feeds/luci-app-modem-watchdog/root/usr/sbin/modem-watchdog
 grep -Fq 'action=recovery-gate' firmware/feeds/luci-app-modem-watchdog/root/usr/sbin/modem-watchdog
 grep -Fq 'add_worker coordinator' firmware/feeds/luci-app-modem-watchdog/root/etc/init.d/modem_watchdog
-grep -Fq 'reason=kernel-data-path-lost' firmware/files/usr/lib/zbt/qmi-session.sh
-grep -Fq 'qmi_kernel_misses" -ge 3' firmware/files/usr/lib/zbt/qmi-session.sh
+! grep -Fq 'kernel-data-path-lost' firmware/files/usr/lib/zbt/qmi-session.sh
+grep -Fq 'result=worker-registered' firmware/files/usr/lib/zbt/modem-recovery.sh
 grep -Fq 'fixed modem slot $slot not enumerated yet' firmware/patches/qmodem-fixed-slot-state-v14.patch
 grep -Fq '4_1|2_1) state_fullfill=1' firmware/patches/qmodem-fixed-slot-state-v14.patch
 test -x firmware/files/usr/sbin/zbt-qmodem-performance-policy

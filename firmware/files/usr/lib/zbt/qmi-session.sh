@@ -1,6 +1,6 @@
 #!/bin/sh
-# QMI child lifecycle and netifd publication. Watchdog owns Internet recovery;
-# this supervisor owns loss of the local address/default-route data path.
+# QMI child lifecycle and netifd publication. The device-bound watchdog owns
+# Internet and kernel-path recovery; this supervisor owns only its CM child.
 # No modem AT writes, SIM resets, MTU override, network restart or metric edits.
 
 zbt_qmi_now() {
@@ -55,12 +55,6 @@ zbt_qmi_child_alive() {
 	' "/proc/$cm_pid/status" 2>/dev/null
 }
 
-zbt_qmi_kernel_path() {
-	local family="$1"
-	ip -o -"$family" addr show dev "$modem_netcard" scope global 2>/dev/null | grep -q ' inet' || return 1
-	ip -"$family" route show table main default dev "$modem_netcard" 2>/dev/null | grep -q .
-}
-
 zbt_qmi_cleanup() {
 	local attempt=0
 	# Owned live child only; never use a previous boot's PID file or killall.
@@ -81,7 +75,6 @@ zbt_qmi_cleanup() {
 
 zbt_qmi_session() {
 	local qmi_ifindex cm_pid='' qmi_published4='' qmi_published6='' family interface
-	local qmi_had_kernel_path=0 qmi_kernel_path=0 qmi_kernel_misses=0
 	. /usr/lib/zbt/mwan-runtime.sh
 	. /usr/lib/zbt/qmi-publish.sh
 	case "$modem_config" in 4_1|2_1) ;; *) return 1 ;; esac
@@ -100,27 +93,18 @@ zbt_qmi_session() {
 	while zbt_qmi_child_alive; do
 		if [ "$bridge_enabled" != 1 ]; then
 			zbt_qmi_owned || break
-			# Never destroy a live CM just because mwan3 has a stale offline
-			# result. Direct end-to-end recovery is owned by modem-watchdog.
-			qmi_kernel_path=0
+			# Address/default-route publication is allowed to disappear and be
+			# repaired independently. In particular, a short netifd or mwan3
+			# transition must never kill a healthy CM data call. The central
+			# watchdog directly probes this physical netdev and owns a targeted
+			# redial/GPIO escalation if the local or Internet path really fails.
 			for family in 4 6; do
 				interface=$interface_name
 				[ "$family" != 6 ] || interface=$interface6_name
-				zbt_qmi_kernel_path "$family" && qmi_kernel_path=1
 				if zbt_qmi_publish "$family" "$interface"; then
 					zbt_mwan_refresh "$modem_config" "$modem_netcard" "$(ip -o -"$family" addr show dev "$modem_netcard" scope global | awk '/ inet/ {print $4; exit}')" "$$-$cm_pid" "$family"
 				fi
 			done
-			if [ "$qmi_kernel_path" = 1 ]; then
-				qmi_had_kernel_path=1
-				qmi_kernel_misses=0
-			elif [ "$qmi_had_kernel_path" = 1 ]; then
-				qmi_kernel_misses=$((qmi_kernel_misses + 1))
-				if [ "$qmi_kernel_misses" -ge 3 ]; then
-					logger -t qmodem "slot=$modem_config device=$modem_netcard action=session-restart reason=kernel-data-path-lost misses=$qmi_kernel_misses"
-					break
-				fi
-			fi
 		fi
 		sleep 5
 	done

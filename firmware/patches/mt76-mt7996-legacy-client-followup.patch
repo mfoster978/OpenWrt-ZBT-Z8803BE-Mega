@@ -1,0 +1,67 @@
+--- a/mt7996/main.c
++++ b/mt7996/main.c
+@@ -1331,6 +1331,7 @@ mt7996_mac_sta_event(struct mt7996_dev *dev, struct ieee80211_vif *vif,
+ 				goto unlock;
+ 			break;
+ 		case MT76_STA_EVENT_DISASSOC:
++			msta_link->wcid.tx_info &= ~MT_WCID_TX_INFO_SET;
+ 			for (i = 0; i < ARRAY_SIZE(msta_link->twt.flow); i++)
+ 				mt7996_mac_twt_teardown_flow(dev, link,
+ 							     msta_link, i);
+--- a/tx.c
++++ b/tx.c
+@@ -416,15 +416,21 @@ mt76_txq_dequeue(struct mt76_phy *phy, struct mt76_txq *mtxq)
+ 
+ static void
+ mt76_queue_ps_skb(struct mt76_phy *phy, struct ieee80211_sta *sta,
+-		  struct sk_buff *skb, bool last, bool more_data)
++		  struct sk_buff *skb, bool last, bool more_data,
++		  enum ieee80211_frame_release_type reason)
+ {
+ 	struct mt76_wcid *wcid = (struct mt76_wcid *)sta->drv_priv;
+ 	struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
++	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
+ 
+ 	info->control.flags |= IEEE80211_TX_CTRL_PS_RESPONSE;
+-	if (last)
++	if (last) {
+ 		info->flags |= IEEE80211_TX_STATUS_EOSP |
+ 			       IEEE80211_TX_CTL_REQ_TX_STATUS;
++		if (reason == IEEE80211_FRAME_RELEASE_UAPSD &&
++		    ieee80211_is_data_qos(hdr->frame_control))
++			*ieee80211_get_qos_ctl(hdr) |= IEEE80211_QOS_CTL_EOSP;
++	}
+ 
+ 	mt76_skb_set_moredata(skb, !last || more_data);
+ 	__mt76_tx_queue_skb(phy, MT_TXQ_PSD, skb, wcid, sta, NULL);
+@@ -479,7 +485,7 @@ mt76_release_buffered_frames(struct ieee80211_hw *hw, struct ieee80211_sta *sta,
+ 			nframes--;
+ 			if (last_skb)
+ 				mt76_queue_ps_skb(phy, sta, last_skb, false,
+-						  false);
++						  false, reason);
+ 
+ 			last_skb = skb;
+ 		} while (nframes);
+@@ -487,7 +493,8 @@ mt76_release_buffered_frames(struct ieee80211_hw *hw, struct ieee80211_sta *sta,
+ 
+ 	if (last_skb) {
+ 		more_data |= mt76_ps_tids_pending(sta, release_tids);
+-		mt76_queue_ps_skb(phy, sta, last_skb, true, more_data);
++		mt76_queue_ps_skb(phy, sta, last_skb, true, more_data,
++				  reason);
+ 		dev->queue_ops->kick(dev, hwq);
+ 	} else {
+ 		ieee80211_sta_eosp(sta);
+@@ -705,8 +712,10 @@ mt76_txq_schedule_pending_wcid(struct mt76_phy *phy, struct mt76_wcid *wcid,
+ 		if ((dev->drv->drv_flags & MT_DRV_HW_MGMT_TXQ) &&
+ 		    !(info->flags & IEEE80211_TX_CTL_HW_80211_ENCAP) &&
+ 		    !ieee80211_is_data_present(hdr->frame_control) &&
+-		    (!ieee80211_is_bufferable_mmpdu(skb) ||
++		    (!(wcid->tx_info & MT_WCID_TX_INFO_SET) ||
++		     !ieee80211_is_bufferable_mmpdu(skb) ||
+ 		     ieee80211_is_deauth(hdr->frame_control) ||
++		     ieee80211_is_disassoc(hdr->frame_control) ||
+ 		     head == &wcid->tx_offchannel))
+ 			qid = MT_TXQ_PSD;
+ 
