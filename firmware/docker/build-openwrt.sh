@@ -827,6 +827,9 @@ grep -Fq 'admin/system/mounts' \
 grep -q '/etc/init.d/uhttpd disable' "${rootfs_dir}/etc/uci-defaults/50-zbt-luci-web-recovery" || {
   echo 'LuCI web-stack migration does not disable the competing uhttpd listener' >&2; exit 4;
 }
+grep -q 'if /usr/sbin/zbt-luci-backend-check' "${rootfs_dir}/etc/uci-defaults/50-zbt-luci-web-recovery" || {
+  echo 'LuCI first-boot migration does not actively repair a failed nginx start' >&2; exit 4;
+}
 grep -Eq 'writeCommon\(mldIface,[[:space:]]*selectedDevices\);' \
   "${rootfs_dir}/www/luci-static/resources/view/mlo/main.js" || {
   echo 'Corrected shared-interface MLO page is missing from the image' >&2; exit 4;

@@ -36,22 +36,24 @@ if [ -x /etc/init.d/uwsgi ] && [ -x /etc/init.d/nginx ]; then
 	/etc/init.d/uwsgi enable >/dev/null 2>&1 || true
 	/etc/init.d/nginx enable >/dev/null 2>&1 || true
 	/etc/init.d/zbt-luci-backend enable >/dev/null 2>&1 || true
-	# rcS expands its service list before uci-defaults creates the S81 link.
-	# Wait for the normal S79/S80 services instead of racing them with a fixed
-	# delay; the checker may restart uWSGI only after initial startup settles.
+	# rcS expands its service list before uci-defaults changes service links.
+	# In particular, its saved S50 uhttpd entry can take port 80 after we disable
+	# it and make the first nginx start fail. Do not wait for nginx to report
+	# healthy before invoking the checker whose job is to repair that failure.
+	# Retry the narrow web-only handoff; the checker starts uWSGI, stops uhttpd,
+	# validates nginx and confirms the LuCI backend without touching networking.
 	(
 		attempts=0
-		while [ "$attempts" -lt 60 ]; do
-			if /etc/init.d/uwsgi status >/dev/null 2>&1 &&
+		while [ "$attempts" -lt 12 ]; do
+			if /usr/sbin/zbt-luci-backend-check >/dev/null 2>&1 &&
+			   /etc/init.d/uwsgi status >/dev/null 2>&1 &&
 			   /etc/init.d/nginx status >/dev/null 2>&1; then
-				sleep 2
-				/usr/sbin/zbt-luci-backend-check >/dev/null 2>&1 || true
 				exit 0
 			fi
 			attempts=$((attempts + 1))
-			sleep 1
+			sleep 2
 		done
-		logger -t zbt-luci-backend 'initial LuCI services did not settle within 60 seconds; normal S81 check will run on subsequent boots'
+		logger -t zbt-luci-backend 'initial LuCI frontend repair did not complete; leaving configuration unchanged'
 	) &
 fi
 exit 0

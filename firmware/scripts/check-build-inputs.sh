@@ -132,10 +132,13 @@ grep -Fq "system.zbt_luci_http.nginx_migrated" \
   firmware/files/etc/uci-defaults/50-zbt-luci-web-recovery
 grep -Fq "nginx._lan.include='conf.d/*.locations'" \
   firmware/files/etc/uci-defaults/50-zbt-luci-web-recovery
-grep -Fq '/etc/init.d/uwsgi status' \
+grep -Fq 'if /usr/sbin/zbt-luci-backend-check' \
   firmware/files/etc/uci-defaults/50-zbt-luci-web-recovery
-grep -Fq '/etc/init.d/nginx status' \
-  firmware/files/etc/uci-defaults/50-zbt-luci-web-recovery
+if grep -Eq 'if /etc/init.d/uwsgi status.*&&' \
+  firmware/files/etc/uci-defaults/50-zbt-luci-web-recovery; then
+  echo 'LuCI first-boot recovery must not wait for failed nginx before invoking its repair' >&2
+  exit 1
+fi
 if grep -Fq '( sleep 5;' firmware/files/etc/uci-defaults/50-zbt-luci-web-recovery; then
   echo 'LuCI first-boot recovery must not race normal service startup' >&2
   exit 1

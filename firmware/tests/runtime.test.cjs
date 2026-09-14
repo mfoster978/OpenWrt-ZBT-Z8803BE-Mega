@@ -510,7 +510,7 @@ test('Speedify has a ROM-resident LuCI setup screen across sysupgrade', () => {
   assert.match(file('firmware/files/etc/uci-defaults/99-speedify-bootstrap'), /rm -f \/tmp\/luci-indexcache/);
 });
 
-test('LuCI recovery makes nginx the only frontend and repairs a 502 backend once', () => {
+test('LuCI recovery actively repairs a failed first nginx start and a 502 backend', () => {
   const checker = file('firmware/files/usr/sbin/zbt-luci-backend-check');
   const migration = file('firmware/files/etc/uci-defaults/50-zbt-luci-web-recovery');
   const service = file('firmware/files/etc/init.d/zbt-luci-backend');
@@ -521,10 +521,10 @@ test('LuCI recovery makes nginx the only frontend and repairs a 502 backend once
   assert.match(migration, /nginx enable/);
   assert.match(migration, /nginx\._lan\.include='conf\.d\/\*\.locations'/);
   assert.match(migration, /nginx_migrated='2'/);
-  assert.match(migration, /\/etc\/init\.d\/uwsgi status/);
-  assert.match(migration, /\/etc\/init\.d\/nginx status/);
-  assert.match(migration, /attempts.*-lt 60/);
-  assert.match(migration, /zbt-luci-backend-check/);
+  assert.match(migration, /attempts.*-lt 12/);
+  assert.match(migration, /if \/usr\/sbin\/zbt-luci-backend-check/);
+  assert.match(migration, /zbt-luci-backend-check[\s\S]*\/etc\/init\.d\/uwsgi status[\s\S]*\/etc\/init\.d\/nginx status/);
+  assert.doesNotMatch(migration, /if \/etc\/init\.d\/uwsgi status[\s\S]*\/etc\/init\.d\/nginx status[\s\S]*zbt-luci-backend-check/);
   assert.doesNotMatch(migration, /\( sleep 5;/);
   assert.match(checker, /\[ -S "\$SOCKET" \]/);
   assert.match(checker, /\[ "\$http_status" = 502 \]/);
