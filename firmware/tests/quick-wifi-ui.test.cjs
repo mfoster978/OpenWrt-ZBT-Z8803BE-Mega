@@ -145,8 +145,46 @@ test('legacy device compatibility applies channel 1 and repairs settings without
   assert.deepEqual(counters(), { saves: 1, applies: 1 });
 });
 
+test('legacy device compatibility retains a three-band MLO network on 5 and 6 GHz only', async () => {
+  const { api, devices, ifaces, counters } = fixture();
+  const shared = { '.name': 'mld_primary', mode: 'ap', device: ['radioA', 'radioB', 'radioC'],
+    network: ['lan'], mlo: '1', ssid: 'WiFi7', key: 'mlo-password', encryption: 'sae', ieee80211w: '2', disabled: '0' };
+  const unrelated = { '.name': 'mld_other', mode: 'ap', device: ['radioB', 'radioC'],
+    network: ['guest'], mlo: true, ssid: 'Guest WiFi7', key: 'other-password', encryption: 'sae', disabled: '0' };
+  ifaces.push(shared, unrelated);
+  const sharedBefore = structuredClone(shared);
+  const otherIfacesBefore = JSON.stringify(ifaces.filter(row => !['default_radioA', 'mld_primary'].includes(row['.name'])));
+  const otherRadiosBefore = JSON.stringify(devices.slice(1));
+
+  const targets = api.quickWifiTargets();
+  assert.equal(targets.byBand['2g'], 'default_radioA', 'profile still requires the separate legacy AP');
+  await api.applyCameraCompatibility(targets);
+
+  assert.deepEqual(shared, { ...sharedBefore, device: ['radioB', 'radioC'] });
+  assert.equal(JSON.stringify(ifaces.filter(row => !['default_radioA', 'mld_primary'].includes(row['.name']))), otherIfacesBefore,
+    'unrelated MLO and ordinary AP/uplink sections retain all options');
+  assert.equal(JSON.stringify(devices.slice(1)), otherRadiosBefore);
+  assert.deepEqual(counters(), { saves: 1, applies: 1 });
+});
+
+test('legacy device compatibility disables MLO when fewer than two links would remain', async () => {
+  for (const links of [['radioA', 'radioB'], ['radioA']]) {
+    const { api, ifaces, counters } = fixture();
+    const shared = { '.name': 'mld_limited', mode: 'ap', device: links,
+      network: ['lan'], mlo: 1, ssid: 'Limited MLO', key: 'mlo-password', encryption: 'sae', ieee80211w: '2', disabled: '0' };
+    ifaces.push(shared);
+    const before = structuredClone(shared);
+    await api.applyCameraCompatibility(api.quickWifiTargets());
+    assert.deepEqual(shared, { ...before, disabled: '1' }, 'keep original MLO settings recoverable while disabling incompatible links');
+    assert.equal(ifaces.find(row => row['.name'] === 'default_radioA').disabled, '0');
+    assert.deepEqual(counters(), { saves: 1, applies: 1 });
+  }
+});
+
 test('legacy device compatibility refuses shared MLO and invalid keys before any writes', async () => {
   const { api, ifaces, devices, counters } = fixture();
+  ifaces.push({ '.name': 'mld_companion', mode: 'ap', device: ['radioA', 'radioB', 'radioC'],
+    network: ['lan'], mlo: '1', ssid: 'Companion MLO', key: 'mlo-password', encryption: 'sae', disabled: '0' });
   const ap = ifaces.find(row => row['.name'] === 'default_radioA');
   ap.device = ['radioA', 'radioB', 'radioC'];
   ap.mlo = '1';

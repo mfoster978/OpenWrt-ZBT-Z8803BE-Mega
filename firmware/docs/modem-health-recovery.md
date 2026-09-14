@@ -219,6 +219,13 @@ upgrade does not apply this optional profile automatically. The user's MDVR
 connected after a phone-hotspot connection and return to the router; that
 sequence does not establish that channel 1 alone fixed the device.
 
+Commit `2f53bf7` also removes the legacy 2.4 GHz radio from any MLO AP that
+includes it when this optional profile is applied. An MLO AP with at least two
+remaining device entries retains those links; otherwise that MLO AP is disabled.
+Unrelated APs and MLO networks without the legacy radio are left unchanged.
+This prevents an MLO AP from retaining a link on the radio being switched to
+HT20; it does not automatically change MLO configuration merely by upgrading.
+
 Regression tests cover slot isolation, direct IPv4/IPv6 health, LED transitions,
 disabled controls, interrupted pulses, cooldowns, escalation, hourly limits,
 adaptive lock exclusion, external address publication and actual ARM64 UCI
