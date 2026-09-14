@@ -959,7 +959,7 @@ test('watchdog has independent slot workers and a non-blocking MWAN coordinator'
   assert.match(worker, /coordinate\(\)[\s\S]*zbt-mwan-apply/);
   assert.match(worker, /action=recovery-gate/);
   assert.doesNotMatch(worker.slice(worker.indexOf('watch_slot()'), worker.indexOf('coordinate()')), /zbt-mwan-apply|zbt-mwan-failback/);
-  assert.match(recovery, /Register the selected slot immediately[\s\S]*qmodem_network dial "\$section"/);
+  assert.match(recovery, /rm -f "\$path"\s+tries=0\s+while \[ "\$tries" -lt 30 \]; do\s+\/etc\/init\.d\/qmodem_network dial "\$section"/);
   assert.match(recovery, /zbt_recovery_worker_pid[\s\S]*result=worker-registered/);
   assert.doesNotMatch(recovery.slice(recovery.indexOf('zbt_recovery_action()'), recovery.indexOf('zbt_recovery_resume()')), /newindex|\[ "\$tries" -lt 60 \]/);
   assert.match(migration, /modem_watchdog\.global\.enabled=1/);
