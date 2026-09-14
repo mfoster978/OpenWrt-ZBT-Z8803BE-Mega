@@ -226,6 +226,16 @@ Unrelated APs and MLO networks without the legacy radio are left unchanged.
 This prevents an MLO AP from retaining a link on the radio being switched to
 HT20; it does not automatically change MLO configuration merely by upgrading.
 
+The later commit `0d21ee5` extends the existing `mld_*` upgrade migration to
+exclude device entries whose configured `htmode` does not start with `EHT`.
+When at least two EHT devices remain, preserved generated MLO records are
+repaired using those devices, while the separate legacy AP's settings remain
+unchanged. If fewer than two remain, this migration logs and leaves that group
+unchanged; unlike the optional Quick Wi-Fi action it does not disable the MLD.
+It commits configuration for normal startup without issuing a Wi-Fi reload.
+The shared router session reports a working 5+6 GHz MLD after manually removing
+the HT20 radio; it does not establish that every client will use both links.
+
 Regression tests cover slot isolation, direct IPv4/IPv6 health, LED transitions,
 disabled controls, interrupted pulses, cooldowns, escalation, hourly limits,
 adaptive lock exclusion, external address publication and actual ARM64 UCI
