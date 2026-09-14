@@ -1,0 +1,33 @@
+#!/bin/sh
+# ash uses dynamic scoping for shell locals. qmi-publish.sh is called from
+# helpers whose zbt_qmi_owned() closure reads the caller's qmi_ifindex. A local
+# with that same name inside zbt_qmi_publish() shadows it and makes every valid
+# CM session fail ownership before notify_proto. Rename only the publish-local
+# cache variable; do not change the caller/session identity variable.
+set -eu
+file=/usr/lib/zbt/qmi-publish.sh
+[ -f "$file" ] || exit 0
+
+if grep -Fq 'current publish_ifindex' "$file" &&
+   grep -Fq 'zbt_qmi_cache_ipv4_route "$modem_config" "$modem_netcard" "$publish_ifindex"' "$file"; then
+	exit 0
+fi
+
+[ "$(grep -Fc 'local family="$1" interface="$2" addresses routes payload snapshot current qmi_ifindex' "$file" || true)" = 1 ] || exit 1
+[ "$(grep -Fc 'qmi_ifindex=$(cat "${ZBT_SYSFS:-/sys}/class/net/$modem_netcard/ifindex" 2>/dev/null)' "$file" || true)" = 1 ] || exit 1
+[ "$(grep -Fc 'zbt_qmi_cache_ipv4_route "$modem_config" "$modem_netcard" "$qmi_ifindex" || true' "$file" || true)" = 1 ] || exit 1
+
+tmp="$file.zbt.$$"
+sed \
+	-e 's/local family="$1" interface="$2" addresses routes payload snapshot current qmi_ifindex/local family="$1" interface="$2" addresses routes payload snapshot current publish_ifindex/' \
+	-e 's/qmi_ifindex=$(cat "${ZBT_SYSFS:-\/sys}\/class\/net\/$modem_netcard\/ifindex" 2>\/dev\/null)/publish_ifindex=$(cat "${ZBT_SYSFS:-\/sys}\/class\/net\/$modem_netcard\/ifindex" 2>\/dev\/null)/' \
+	-e 's/zbt_qmi_cache_ipv4_route "$modem_config" "$modem_netcard" "$qmi_ifindex" || true/zbt_qmi_cache_ipv4_route "$modem_config" "$modem_netcard" "$publish_ifindex" || true/' \
+	"$file" > "$tmp"
+
+sh -n "$tmp" || { rm -f "$tmp"; exit 1; }
+[ "$(grep -Fc 'current publish_ifindex' "$tmp" || true)" = 1 ] || { rm -f "$tmp"; exit 1; }
+[ "$(grep -Fc 'current qmi_ifindex' "$tmp" || true)" = 0 ] || { rm -f "$tmp"; exit 1; }
+
+mv -f "$tmp" "$file"
+logger -t zbt-qmi 'fixed publish-local ifindex shadowing so caller session identity remains visible'
+exit 0
