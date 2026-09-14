@@ -237,13 +237,25 @@ echo 17 > "$DB/sys/class/net/wwan8/ifindex"; echo $$ > "$DB/recovery/4_1.recover
 rm "$DB/recovery/4_1.recovering"; echo 0 > "$DB/uci/qmodem.4_1.enable_dial"; zbt_health_online 4_1 || echo disabled`,{GOOD_DEVICE:'wwan8'});
   assert.equal(f.out,'fresh\nstale\nreplaced\nrecovering\ndisabled\n');
 });
-test('three failed probes trigger only selected GPIO, then explicitly dial; cooldown prevents storms',()=>{
-  const f=fixture('echo 0 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; cycle; cycle; cycle; cycle; cycle; cycle');
-  assert.equal((f.calls.match(/service hang 4_1/g)||[]).length,1);
+test('persistent GPIO recovery waits for the full configured verification interval and failure threshold',()=>{
+  const f=fixture(`echo 0 > "$DB/uci/modem_watchdog.modem1.redial_attempts"
+cycle; cycle; cycle
+echo 390 > "$DB/clock"; cycle
+echo 410 > "$DB/clock"; cycle
+echo 419 > "$DB/clock"; cycle
+cp "$DB/calls" "$DB/calls-before-boundary"
+cp "$DB/recovery/4_1.state" "$DB/state-before-boundary"
+echo 420 > "$DB/clock"; cycle`);
+  const before=fs.readFileSync(path.join(f.d,'calls-before-boundary'),'utf8');
+  assert.equal((before.match(/service hang 4_1/g)||[]).length,1,'three fresh failures must not bypass the 60-second verification interval at t=419');
+  assert.deepEqual(fs.readFileSync(path.join(f.d,'state-before-boundary'),'utf8').trim().split(' ').slice(0,4),['3','0','360','1']);
+  assert.equal((f.calls.match(/service hang 4_1/g)||[]).length,2,'the next GPIO recovery may dispatch at t=420, exactly 60 seconds after the prior action');
+  assert.deepEqual(fs.readFileSync(path.join(f.d,'recovery/4_1.state'),'utf8').trim().split(' ').slice(0,4),['0','0','420','2']);
+  assertPowerCycleSequence(before,'4_1');
   assertPowerCycleSequence(f.calls,'4_1');
   assert.doesNotMatch(f.calls,/service (?:redial|.*2_1)/);
   assert.equal(fs.readFileSync(path.join(f.d,'sys/class/gpio/5g1/value'),'utf8').trim(),'1');
-  assert.equal(fs.readFileSync(path.join(f.d,'sys/class/net/wwan8/ifindex'),'utf8').trim(),'18');
+  assert.equal(fs.readFileSync(path.join(f.d,'sys/class/net/wwan8/ifindex'),'utf8').trim(),'19');
   assert.equal(fs.readFileSync(path.join(f.d,'sys/class/net/wwan3/ifindex'),'utf8').trim(),'23');
 });
 test('first confirmed boot outage uses boot grace without an extra action cooldown',()=>{

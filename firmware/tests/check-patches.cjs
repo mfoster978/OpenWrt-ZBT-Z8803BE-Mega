@@ -202,6 +202,11 @@ ${dispatch}
     }
   });
   process.stdout.write(result);
+  process.stdout.write(run(process.execPath, ['--test',
+    path.join(__dirname, 'modem-usb-reset.test.cjs'),
+    path.join(__dirname, 'modem-usb-reset-write-effect.test.cjs'),
+    path.join(__dirname, 'qmi-publish-scope.test.cjs')
+  ]));
   process.stdout.write(run(process.execPath, ['--test', path.join(__dirname, 'mwan-lifecycle.test.cjs')], {
     env: {...process.env, MWAN3_TEST_TREE:path.join(tmp,'packages')}
   }));
