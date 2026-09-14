@@ -95,6 +95,48 @@ function quickWifiTargets() {
 	return { radios: radios, byBand: byBand, sections: sections, missing: missing };
 }
 
+function quickWifiMloState(targets) {
+	var legacySection = targets.byBand['2g'] || null;
+	var five = targets.byBand['5g'] || null;
+	var six = targets.byBand['6g'] || null;
+	var mloSection = five && five === six && isMlo({ mlo: uci.get('wireless', five, 'mlo') }) ? five : null;
+	var legacyEnabled = !!legacySection && !isDisabled({ disabled: uci.get('wireless', legacySection, 'disabled') });
+	var legacyStandalone = !!legacySection && !isMlo({ mlo: uci.get('wireless', legacySection, 'mlo') }) &&
+		asList(uci.get('wireless', legacySection, 'device')).length === 1;
+	var legacySsid = legacySection ? (uci.get('wireless', legacySection, 'ssid') || '') : '';
+	var legacyKey = legacySection ? (uci.get('wireless', legacySection, 'key') || '') : '';
+	var mloSsid = mloSection ? (uci.get('wireless', mloSection, 'ssid') || '') : '';
+	var mloKey = mloSection ? (uci.get('wireless', mloSection, 'key') || '') : '';
+	var activeMlo = !!mloSection;
+	var sharedName = activeMlo && legacyEnabled && legacyStandalone && !!legacySsid && legacySsid === mloSsid;
+	var sharedCredentials = sharedName && legacyKey === mloKey;
+	return {
+		activeMlo: activeMlo,
+		mloSection: mloSection,
+		legacySection: legacySection,
+		legacyEnabled: legacyEnabled,
+		legacyStandalone: legacyStandalone,
+		legacySsid: legacySsid,
+		mloSsid: mloSsid,
+		sharedName: sharedName,
+		sharedCredentials: sharedCredentials
+	};
+}
+
+function mloStandaloneConflicts(targets, ssid) {
+	var state = quickWifiMloState(targets);
+	if (!state.activeMlo || !ssid)
+		return [];
+	var mloDevices = asList(uci.get('wireless', state.mloSection, 'device'));
+	return uci.sections('wireless', 'wifi-iface').filter(function(section) {
+		if (!isLanAp(section) || isMlo(section) || isDisabled(section) || section['.name'] === state.legacySection)
+			return false;
+		if ((section.ssid || '') !== ssid)
+			return false;
+		return asList(section.device).some(function(device) { return mloDevices.indexOf(device) !== -1; });
+	}).map(function(section) { return section['.name']; });
+}
+
 function utf8Length(value) {
 	return new TextEncoder().encode(value).length;
 }
@@ -111,11 +153,22 @@ function validateQuickWifi(ssid, password) {
 	return null;
 }
 
-function applyQuickWifi(targets, ssid, password) {
-	targets.sections.forEach(function(section) {
+function applyQuickWifi(targets, ssid, password, options) {
+	options = options || {};
+	var state = quickWifiMloState(targets);
+	var shareLegacy = options.shareLegacy !== false;
+	var sections = targets.sections.slice();
+	if (state.activeMlo && state.legacySection && !shareLegacy)
+		sections = sections.filter(function(section) { return section !== state.legacySection; });
+	sections.forEach(function(section) {
 		uci.set('wireless', section, 'ssid', ssid);
 		uci.set('wireless', section, 'key', password);
 	});
+	if (state.activeMlo) {
+		mloStandaloneConflicts(targets, ssid).forEach(function(section) {
+			uci.set('wireless', section, 'disabled', '1');
+		});
+	}
 	return uci.save().then(function() { return ui.changes.apply(); });
 }
 
@@ -189,15 +242,15 @@ function cameraDiagnosticsView(report) {
 	var rows = [];
 	(report.access_points || []).forEach(function(ap) {
 		rows.push(E('p', {}, '%s: %s'.format(ap.ssid || ap.iface,
-			ap.available ? _('Access point running') : _('Access point status unavailable'))));
-		(ap.clients || []).forEach(function(client) {
+			ap.available ? _('Access point running') : _('Access point status unavailable')));
+		(ap.slients || []).forEach(function(client) {
 			rows.push(E('p', {}, '%s — %s%s'.format(client.mac, cameraClientStage(client),
 				client.addresses && client.addresses.length ? ' (' + client.addresses.join(', ') + ')' : '')));
 		});
 	});
 	if (!(report.access_points || []).some(function(ap) { return (ap.clients || []).length > 0; }))
-		rows.push(E('p', {}, _('No 2.4 GHz clients are associated right now. Retry the legacy device connection, then refresh this report.')));
-	rows.push(E('p', {}, _('Match the legacy device’s Wi-Fi MAC address with the entries above. A DHCP lease can remain after a device disconnects, and devices using a static address may have no DHCP lease. Wi-Fi authentication does not prove Internet access.')));
+		rows.push(E('p', {}, _('No 2.4 GHz clients are associated right now. Retry the legacy device connection, then refresh this report.'));
+	rows.push(E('p', {}, _('Match the legacy device’s Wi-Fi MAC address with the entries above. A DHCP lease can remain after a device disconnects, and devices using a static address may have no DHCP lease. Wi-Fi authentication does not prove Internet access.'));
 	if (report.events && report.events.length) {
 		rows.push(E('h4', {}, _('Recent Wi-Fi connection events')));
 		rows.push(E('pre', { 'style': 'white-space:pre-wrap;overflow-wrap:anywhere' }, report.events.join('\n')));
@@ -212,6 +265,7 @@ return view.extend({
 
 	render: function() {
 		var targets = quickWifiTargets();
+		var mloState = quickWifiMloState(targets);
 		var cameraTarget = cameraCompatibilityTarget(targets);
 		var diagnostics = E('div', { 'aria-live': 'polite' });
 		var callDiagnostics = rpc.declare({ object: 'zbt.wifi', method: 'diagnostics', expect: {} });
@@ -221,8 +275,8 @@ return view.extend({
 			'click': function() {
 				ui.showModal(_('Apply 2.4 GHz Legacy Device Compatibility?'), [
 					E('p', {}, _('The primary 2.4 GHz network will use channel 1, WPA2-AES, 20 MHz 802.11n, and legacy rates, with protected management frames and fast roaming disabled. Its network name and password stay the same. Wi-Fi will reconnect briefly.')),
-					E('p', {}, _('If a Wi-Fi 7 MLO network currently includes 2.4 GHz, that link will be removed so MLO can continue on its remaining Wi-Fi 7 bands.')),
-					E('p', {}, _('The channel, 20 MHz radio mode, and rates also apply to other networks sharing the 2.4 GHz radio. Their security, names, and passwords stay the same.')),
+				E('p', {}, _('If a Wi-Fi 7 MLO network currently includes 2.4 GHz, that link will be removed so MLO can continue on its remaining Wi-Fi 7 bands.')),
+				E('p', {}, _('The channel, 20 MHz radio mode, and rates also apply to other networks sharing the 2.4 GHz radio. Their security, names, and passwords stay the same.')),
 					E('div', { 'class': 'right' }, [
 						E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')), ' ',
 						E('button', { 'class': 'btn cbi-button cbi-button-positive', 'click': function() {
@@ -234,10 +288,9 @@ return view.extend({
 								ui.addNotification(null, E('p', {}, error.message || String(error)), 'danger');
 							}).finally(function() { cameraButton.disabled = false; });
 						} }, _('Apply Compatibility'))
-					])
 				]);
 			}
-		}, _('Apply 2.4 GHz Legacy Device Compatibility'));
+		}, _('Apply 2.4 GHZ Legacy Device Compatibility'));
 		var diagnosticsButton = E('button', {
 			'class': 'btn cbi-button',
 			'click': function() {
@@ -276,6 +329,11 @@ return view.extend({
 			'autocomplete': 'new-password',
 			'style': 'width:100%;max-width:32em'
 		});
+		var shareLegacyInput = E('input', {
+			'id': 'quick-wifi-share-legacy',
+			'type': 'checkbox',
+			'checked': mloState.sharedCredentials ? 'checked' : null
+		});
 
 		var missingText = targets.missing.map(function(band) { return BAND_LABEL[band]; }).join(', ');
 		var ready = targets.missing.length === 0 && targets.sections.length > 0;
@@ -296,49 +354,77 @@ return view.extend({
 				return;
 			}
 
-			ui.showModal(_('Apply Quick Wi-Fi Setup?'), [
-				E('p', {}, _('The 2.4 GHz, 5 GHz, and 6 GHz primary networks will all use “%s” and the password you entered. Their existing security modes and other radio settings will be preserved.').format(ssid)),
-				E('p', { 'class': 'alert-message warning' }, _('Connected Wi-Fi devices will disconnect briefly and must reconnect using the new name and password.')),
-				E('div', { 'class': 'right' }, [
-					E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')), ' ',
-					E('button', {
-						'class': 'btn cbi-button cbi-button-positive',
-						'click': function() {
-							ui.hideModal();
-							applyButton.disabled = true;
-							applyButton.classList.add('spinning');
-							ui.addNotification(null, E('p', {}, _('Applying the new Wi-Fi name and password. Reconnect to “%s” if this device disconnects.').format(ssid)), 'info');
-							return applyQuickWifi(targets, ssid, password).then(function() {
-								passwordInput.value = '';
-								ui.addNotification(null, E('p', {}, _('All three primary Wi-Fi networks were updated.')), 'info');
-							}).catch(function(error) {
-								ui.addNotification(null, E('p', {}, _('Unable to apply Wi-Fi settings: %s').format(error.message || String(error))), 'danger');
-							}).finally(function() {
-								applyButton.disabled = false;
-								applyButton.classList.remove('spinning');
-							});
-						}
-					}, _('Apply to All Three Bands'))
-				])
-			]);
+			var shareLegacy = !mloState.activeMlo || !!shareLegacyInput.checked;
+			var conflicts = mloState.activeMlo ? mloStandaloneConflicts(targets, ssid) : [];
+			var summary = mloState.activeMlo ?
+				(shareLegacy ? _('The Wi-Fi 7 MLO network and the separate legacy 2.4 GHz access point will use “%s” and the password you entered. Their security modes remain independent.').format(ssid) :
+				_('The Wi-Fi 7 MLO network will use “%s” and the password you entered. The separate legacy 2.4 GHz access point will keep its current name and password.')) :
+				_('The 2.4 GHz, 5 GHz, and 6 GHz primary networks will all use “%s” and the password you entered. Their existing security modes and other radio settings will be preserved.').format(ssid);
+			var modal = [ E('p', {}, summary) ];
+			if (conflicts.length)
+				modal.push(E('p', { 'class': 'alert-message warning' }, _('Standalone 5/6 GHz access points already using “%s” will be disabled so Wi-Fi 7 clients do not bypass MLO. Their settings are preserved and can be re-enabled later.'));
+			modal.push(E('p', { 'class': 'alert-message warning' }, _('Connected Wi-Fi devices will disconnect briefly and must reconnect using the selected network name and password.'));
+			modal.push(E('div', { 'class': 'right' }, [
+				E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')), ' ',
+				E('button', {
+					'class': 'btn cbi-button cbi-button-positive',
+					'click': function() {
+						ui.hideModal();
+						applyButton.disabled = true;
+						applyButton.classList.add('spinning');
+						ui.addNotification(null, E('p', {}, _('Applying the new Wi-Fi name and password. Reconnect to “%s” if this device disconnects.').format(ssid)), info');
+						return applyQuickWifi(targets, ssid, password, { shareLegacy: shareLegacy }).then(function() {
+							passwordInput.value = '';
+							ui.addNotification(null, E('p', {}, mloState.activeMlo ? _('Wi-Fi 7 MLO settings were updated without changing the legacy 2.4 GHz security mode.') : _('All three primary Wi-Fi networks were updated.')), info');
+						}).catch(function(error) {
+							ui.addNotification(null, E('p', {}, _('Unable to apply Wi-Fi settings: %s').format(error.message || String(error))), danger);
+						}).finally(function() {
+							applyButton.disabled = false;
+							applyButton.classList.remove('spinning');
+						});
+					}
+				}, mloState.activeMlo ? _('Apply MLO Wi-Fi Setup') : _('Apply to All Three Bands'))
+			]));
+			ui.showModal(_('Apply Quick Wi-Fi Setup?'), modal);
 		}
 
 		applyButton = E('button', {
 			'class': 'btn cbi-button cbi-button-apply cbi-button-positive',
 			'disabled': ready ? null : 'disabled',
 			'click': save
-		}, _('Apply to All Three Bands'));
+		}, mloState.activeMlo ? _('Apply MLO Wi-Fi Setup') : _('Apply to All Three Bands'));
+
+		var legacyStatus = null;
+		if (mloState.activeMlo) {
+			if (!mloState.legacySection)
+				legacyStatus = _('No separate legacy 2.4 GHz LAN access point was found.');
+			else if (!mloState.legacyEnabled)
+				legacyStatus = _('The separate legacy 2.4 GHz access point is currently disabled.');
+			else if (!mloState.legacyStandalone)
+				legacyStatus = _('The selected 2.4 GHz access point is not a standalone legacy network.');
+			else if (mloState.sharedCredentials)
+				legacyStatus = _('Legacy 2.4 GHz currently uses the same network name and password as MLO.');
+			else if (mloState.sharedName)
+				legacyStatus = _('Legacy 2.4 GHz currently uses the same network name as MLO but a different password.');
+			else
+				legacyStatus = _('Legacy 2.4 GHz currently uses a separate network name.');
+		}
+		var currentConflicts = mloState.activeMlo ? mloStandaloneConflicts(targets, mloState.mloSsid) : [];
 
 		return E('div', { 'class': 'cbi-map' }, [
 			E('h2', {}, _('Quick Wi-Fi Setup')),
-			E('p', { 'class': 'cbi-map-descr' }, _('Set one network name and password for the primary 2.4 GHz, 5 GHz, and 6 GHz access points. Advanced Wi-Fi and security settings are left unchanged.')),
+			E('p', { 'class': 'cbi-map-descr' }, mloState.activeMlo ?
+				_('Configure the primary Wi-Fi 7 MLO network and choose whether the separate legacy 2.4 GHz access point should share its name and password. Security modes and radio settings stay independent.') :
+				_('Set one network name and password for the primary 2.4 GHz, 5 GHz, and 6 GHz access points. Advanced Wi-Fi and security settings are left unchanged.')),
 			E('div', { 'class': 'cbi-section' }, BAND_ORDER.map(function(band) {
 				var section = targets.byBand[band];
 				return E('p', {}, '%s: %s%s'.format(BAND_LABEL[band], section ?
 					(uci.get('wireless', section, 'ssid') || section) : _('not found'),
 					section && isMlo({ mlo: uci.get('wireless', section, 'mlo') }) ? _(' (shared MLO network)') : ''));
 			})),
-			E('p', {}, _('Only the networks listed above are updated. Guest networks and other secondary access points are left unchanged. Matching names does not add the legacy 2.4 GHz network to MLO.')),
+			mloState.activeMlo ? E('p', {}, legacyStatus) :
+				E('p', {}, _('Only the networks listed above are updated. Guest networks and other secondary access points are left unchanged. Matching names does not add the legacy 2.4 GHz network to MLO.')),
+			currentConflicts.length ? E('div', { 'class': 'alert-message warning' }, _('There are enabled standalone 5/6 GHz access points using the same name as the MLO network. Wi-Fi 7 clients can join those instead of MLO. Applying this MLO setup with the same name will disable those duplicate access points while preserving their settings.')) : null,
 			!ready ? E('div', { 'class': 'alert-message warning' }, _('Setup cannot continue because these primary bands were not found: %s. Use Network → Wireless to repair or create them first.').format(missingText || _('unknown'))) : null,
 			E('div', { 'class': 'cbi-section' }, [
 				E('div', { 'class': 'cbi-section-node' }, [
@@ -348,8 +434,15 @@ return view.extend({
 					]),
 					E('div', { 'class': 'cbi-value' }, [
 						E('label', { 'class': 'cbi-value-title', 'for': 'quick-wifi-password' }, _('Wi-Fi Password')),
-						E('div', { 'class': 'cbi-value-field' }, [ passwordInput, E('div', { 'class': 'cbi-value-description' }, _('The password is written to all three primary networks and is never displayed after saving.')) ])
-					])
+						E('div', { 'class': 'cbi-value-field' }, [ passwordInput, E('div', { 'class': 'cbi-value-description' }, mloState.activeMlo ? _('The password is always written to the MLO network and is also written to legacy 2.4 GHz only when the option below is selected.') : _('The password is written to all three primary networks and is never displayed after saving.')) ])
+					]),
+					mloState.activeMlo ? E('div', { 'class': 'cbi-value' }, [
+						E('label', { 'class': 'cbi-value-title', 'for': 'quick-wifi-share-legacy' }, _('Legacy 2.4 GHz')),
+						E('div', { 'class': 'cbi-value-field' }, [
+							E('label', { 'style': 'display:inline-flex;align-items:center;gap:0.5em' }, [ shareLegacyInput, _('Use the same network name and password on the separate legacy 2.4 GHz access point') ]),
+							E('div', { 'class': 'cbi-value-description' }, _('This does not add 2.4 GHz to MLO. Its WPA2/legacy compatibility settings remain separate. Leave this unchecked to keep a different 2.4 GHz network.'))
+						])
+					]) : null
 				])
 			]),
 			E('div', { 'class': 'cbi-page-actions' }, [ applyButton ]),
