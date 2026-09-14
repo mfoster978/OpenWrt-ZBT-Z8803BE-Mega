@@ -34,8 +34,18 @@ for first in $sections; do
 	done
 
 	devices=""
+	dropped=""
 	for member in $members; do
 		for device in $(uci -q get "wireless.${member}.device"); do
+			# hostapd rejects mld_ap on a radio whose current mode is not EHT.
+			# This matters when the 2.4 GHz legacy-device profile intentionally
+			# changes radio0 to HT20 while an older preserved MLO section still
+			# lists radio0. Keep only radios that can actually host an 802.11be link.
+			htmode="$(uci -q get "wireless.${device}.htmode")"
+			case "$htmode" in
+				EHT*) ;;
+				*) dropped="${dropped}${dropped:+ }${device}"; continue ;;
+			esac
 			case " $devices " in
 				*" $device "*) ;;
 				*) devices="${devices}${devices:+ }${device}" ;;
@@ -45,7 +55,7 @@ for first in $sections; do
 
 	set -- $devices
 	if [ "$#" -lt 2 ]; then
-		logger -t zbt-mlo "leaving invalid one-link MLD '$ssid' unchanged"
+		logger -t zbt-mlo "leaving invalid one-link MLD '$ssid' unchanged after excluding non-EHT radios${dropped:+: $dropped}"
 		processed="${processed}${members} "
 		continue
 	fi
@@ -70,7 +80,7 @@ for first in $sections; do
 	done
 	processed="${processed}${members} "
 	changed=1
-	logger -t zbt-mlo "repaired MLO SSID '$ssid' as one ${#}-radio LAN wifi-iface"
+	logger -t zbt-mlo "repaired MLO SSID '$ssid' as one ${#}-radio LAN wifi-iface${dropped:+; excluded non-EHT radios: $dropped}"
 done
 
 [ "$changed" -eq 0 ] || {
