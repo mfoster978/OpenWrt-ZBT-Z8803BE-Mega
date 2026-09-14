@@ -82,13 +82,20 @@ zbt_5g_target() {
 }
 
 zbt_5g_rat_target() {
-	# Keep QModem's Allowed Network Types control authoritative in automatic
-	# deployment mode. Explicit NSA/SA requests are the only modes allowed to
-	# change mode_pref, and only as much as their topology requires.
+	# While automatic deployment is already active, preserve QModem's Allowed
+	# Network Types choice (including LTE-only). When leaving an explicit NSA or
+	# SA deployment policy for automatic, restore AUTO like the existing UI has
+	# always done. Manual NSA still guarantees an LTE anchor. Manual SA keeps any
+	# RAT set that can actually include NR, only changing an incompatible LTE-only
+	# choice to NR5G.
 	case "$1" in
-		auto|auto_adaptive|auto_preferred) printf '%s\n' "$2" ;;
+		auto|auto_adaptive|auto_preferred)
+			[ "$2" = 0 ] && printf '%s\n' "$3" || printf '%s\n' 'AUTO'
+			;;
 		nsa) printf '%s\n' 'LTE:NR5G' ;;
-		sa) printf '%s\n' 'NR5G' ;;
+		sa)
+			case "$3" in AUTO|*NR5G*) printf '%s\n' "$3" ;; *) printf '%s\n' 'NR5G' ;; esac
+			;;
 		*) return 1 ;;
 	esac
 }
@@ -102,10 +109,9 @@ zbt_5g_apply() {
 	old_mode=$zbt_5g_read_value
 	zbt_5g_read mode_pref || return 1
 	old_rat=$zbt_5g_read_value
-	target_rat=$(zbt_5g_rat_target "$requested" "$old_rat") || return 1
-	# NSA needs an LTE anchor before NSA-only is selected. SA-only is equally
-	# explicit and removes LTE/NSA from mode_pref. Automatic mode never rewrites
-	# the user's Allowed Network Types selection.
+	target_rat=$(zbt_5g_rat_target "$requested" "$old_mode" "$old_rat") || return 1
+	# Enable a compatible RAT before selecting NSA. Automatic mode that is
+	# already active must not overwrite the user's Allowed Network Types choice.
 	if [ "$old_rat" != "$target_rat" ]; then
 		rat_changed=1
 		zbt_5g_write mode_pref "$target_rat" || {
