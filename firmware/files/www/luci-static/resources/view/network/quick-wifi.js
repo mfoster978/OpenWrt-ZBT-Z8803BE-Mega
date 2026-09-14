@@ -128,6 +128,7 @@ function applyCameraCompatibility(targets) {
 	var target = cameraCompatibilityTarget(targets);
 	if (!target)
 		return Promise.reject(new Error('A separate 2.4 GHz access point with a valid password is required.'));
+	uci.set('wireless', target.radio, 'channel', '1');
 	uci.set('wireless', target.radio, 'htmode', 'HT20');
 	uci.set('wireless', target.radio, 'legacy_rates', '1');
 	uci.set('wireless', target.radio, 'cell_density', '0');
@@ -166,8 +167,8 @@ function cameraDiagnosticsView(report) {
 		});
 	});
 	if (!(report.access_points || []).some(function(ap) { return (ap.clients || []).length > 0; }))
-		rows.push(E('p', {}, _('No 2.4 GHz clients are associated right now. Retry the DVR connection, then refresh this report.')));
-	rows.push(E('p', {}, _('Match the DVR’s Wi-Fi MAC address with the entries above. A DHCP lease can remain after a device disconnects, and devices using a static address may have no DHCP lease. Wi-Fi authentication does not prove Internet access.')));
+		rows.push(E('p', {}, _('No 2.4 GHz clients are associated right now. Retry the legacy device connection, then refresh this report.')));
+	rows.push(E('p', {}, _('Match the legacy device’s Wi-Fi MAC address with the entries above. A DHCP lease can remain after a device disconnects, and devices using a static address may have no DHCP lease. Wi-Fi authentication does not prove Internet access.')));
 	if (report.events && report.events.length) {
 		rows.push(E('h4', {}, _('Recent Wi-Fi connection events')));
 		rows.push(E('pre', { 'style': 'white-space:pre-wrap;overflow-wrap:anywhere' }, report.events.join('\n')));
@@ -189,16 +190,16 @@ return view.extend({
 			'class': 'btn cbi-button cbi-button-action',
 			'disabled': cameraTarget ? null : 'disabled',
 			'click': function() {
-				ui.showModal(_('Apply 2.4 GHz Camera Compatibility?'), [
-					E('p', {}, _('The primary 2.4 GHz network will use WPA2-AES, 20 MHz 802.11n, and legacy rates, with protected management frames and fast roaming disabled. Its network name and password stay the same. Wi-Fi will reconnect briefly.')),
-					E('p', {}, _('The 20 MHz radio mode and rates also apply to other networks sharing the 2.4 GHz radio. Their security, names, and passwords stay the same.')),
+				ui.showModal(_('Apply 2.4 GHz Legacy Device Compatibility?'), [
+					E('p', {}, _('The primary 2.4 GHz network will use channel 1, WPA2-AES, 20 MHz 802.11n, and legacy rates, with protected management frames and fast roaming disabled. Its network name and password stay the same. Wi-Fi will reconnect briefly.')),
+					E('p', {}, _('The channel, 20 MHz radio mode, and rates also apply to other networks sharing the 2.4 GHz radio. Their security, names, and passwords stay the same.')),
 					E('div', { 'class': 'right' }, [
 						E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')), ' ',
 						E('button', { 'class': 'btn cbi-button cbi-button-positive', 'click': function() {
 							ui.hideModal();
 							cameraButton.disabled = true;
 							return applyCameraCompatibility(targets).then(function() {
-								ui.addNotification(null, E('p', {}, _('Camera compatibility applied. Reconnect the DVR using its existing Wi-Fi name and password.')), 'info');
+								ui.addNotification(null, E('p', {}, _('Legacy device compatibility applied. Reconnect the device using its existing Wi-Fi name and password.')), 'info');
 							}).catch(function(error) {
 								ui.addNotification(null, E('p', {}, error.message || String(error)), 'danger');
 							}).finally(function() { cameraButton.disabled = false; });
@@ -206,7 +207,7 @@ return view.extend({
 					])
 				]);
 			}
-		}, _('Apply 2.4 GHz Camera Compatibility'));
+		}, _('Apply 2.4 GHz Legacy Device Compatibility'));
 		var diagnosticsButton = E('button', {
 			'class': 'btn cbi-button',
 			'click': function() {
@@ -316,9 +317,10 @@ return view.extend({
 			]),
 			E('div', { 'class': 'cbi-page-actions' }, [ applyButton ]),
 			E('div', { 'class': 'cbi-section' }, [
-				E('h3', {}, _('Camera / DVR Connection')),
-				E('p', {}, _('Keeping settings during an upgrade also keeps your previous Wi-Fi security and radio mode. Apply this profile to update the existing 2.4 GHz network for older cameras.')),
-				cameraTarget ? E('p', {}, _('Current 2.4 GHz settings: %s, security %s, protected management frames %s.').format(
+				E('h3', {}, _('Legacy Device Connection')),
+				E('p', {}, _('Keeping settings during an upgrade also keeps your previous Wi-Fi security and radio mode. Apply this profile to update the existing 2.4 GHz network for older or compatibility-sensitive devices.')),
+				cameraTarget ? E('p', {}, _('Current 2.4 GHz settings: channel %s, %s, security %s, protected management frames %s.').format(
+					uci.get('wireless', cameraTarget.radio, 'channel') || _('automatic'),
 					uci.get('wireless', cameraTarget.radio, 'htmode') || _('default'),
 					uci.get('wireless', cameraTarget.section, 'encryption') || _('default'),
 					uci.get('wireless', cameraTarget.section, 'ieee80211w') || _('automatic'))) :
