@@ -1,12 +1,15 @@
 #!/bin/sh
 # QModem's Network Configuration view saved UCI changes and then reloaded the
-# dial service itself. Replace that override with LuCI's normal Save & Apply
-# lifecycle, then reload QModem only after the apply promise has completed.
+# dial service itself. Replace that override with an explicit promise chain:
+# save the form, wait for LuCI to finish applying the staged UCI transaction,
+# and reload QModem only after a successful apply. A rejected apply must never
+# restart the modem service with partially applied settings.
 set -eu
 file=/www/luci-static/resources/view/qmodem/network_config.js
 [ -f "$file" ] || exit 0
 
-if grep -Fq "this.super('handleSaveApply', arguments)" "$file"; then
+if grep -Fq "return ui.changes.apply(mode == '0');" "$file" &&
+   grep -Fq "return callInitAction('qmodem_network', 'reload');" "$file"; then
 	exit 0
 fi
 
@@ -21,8 +24,9 @@ awk '
 	BEGIN { replacing=0 }
 	/^[[:space:]]*handleSaveApply: function\(ev, mode\) \{/ {
 		print "\thandleSaveApply: function(ev, mode) {"
-		print "\t\tvar self = this;"
-		print "\t\treturn this.super('\''handleSaveApply'\'', arguments).then(function() {"
+		print "\t\treturn this.handleSave(ev).then(function() {"
+		print "\t\t\treturn ui.changes.apply(mode == '\''0'\'');"
+		print "\t\t}).then(function() {"
 		print "\t\t\treturn callInitAction('\''qmodem_network'\'', '\''reload'\'');"
 		print "\t\t});"
 		print "\t},"
@@ -36,12 +40,22 @@ awk '
 	{ print }
 ' "$file" > "$tmp"
 
-[ "$(grep -Fc "this.super('handleSaveApply', arguments)" "$tmp" || true)" = 1 ] || {
+[ "$(grep -Fc "return ui.changes.apply(mode == '0');" "$tmp" || true)" = 1 ] || {
 	rm -f "$tmp"
-	logger -t zbt-qmodem-ui 'network Save & Apply patch failed validation'
+	logger -t zbt-qmodem-ui 'network Save & Apply patch failed apply-promise validation'
+	exit 1
+}
+[ "$(grep -Fc "return callInitAction('qmodem_network', 'reload');" "$tmp" || true)" = 1 ] || {
+	rm -f "$tmp"
+	logger -t zbt-qmodem-ui 'network Save & Apply patch failed reload validation'
+	exit 1
+}
+[ "$(grep -Fc "this.super('handleSaveApply', arguments)" "$tmp" || true)" = 0 ] || {
+	rm -f "$tmp"
+	logger -t zbt-qmodem-ui 'network Save & Apply patch retained non-awaiting base handler'
 	exit 1
 }
 
 mv -f "$tmp" "$file"
-logger -t zbt-qmodem-ui 'network Save & Apply now waits for LuCI apply before reloading QModem'
+logger -t zbt-qmodem-ui 'network Save & Apply now reloads QModem only after successful LuCI apply'
 exit 0
