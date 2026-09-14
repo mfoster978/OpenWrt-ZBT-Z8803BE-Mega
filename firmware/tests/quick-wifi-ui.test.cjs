@@ -12,9 +12,9 @@ function fixture() {
   assert.ok(boundary > 0, 'unable to isolate Quick Wi-Fi model functions');
 
   const devices = [
-    { '.name': 'radioA', band: '2g' },
-    { '.name': 'radioB', band: '5g' },
-    { '.name': 'radioC', band: '6g' }
+    { '.name': 'radioA', band: '2g', channel: '11' },
+    { '.name': 'radioB', band: '5g', channel: '149' },
+    { '.name': 'radioC', band: '6g', channel: '37' }
   ];
   const ifaces = [
     { '.name': 'guest_2g', mode: 'ap', device: 'radioA', network: 'guest', ssid: 'Guest', encryption: 'psk2', key: 'guest-pass' },
@@ -56,7 +56,8 @@ function fixture() {
 }
 
 test('Quick Wi-Fi updates only the primary AP on all three physical bands', async () => {
-  const { api, ifaces, counters } = fixture();
+  const { api, devices, ifaces, counters } = fixture();
+  const radiosBefore = JSON.stringify(devices);
   const targets = api.quickWifiTargets();
   assert.deepEqual(targets.missing, []);
   assert.deepEqual(targets.byBand, {
@@ -77,6 +78,7 @@ test('Quick Wi-Fi updates only the primary AP on all three physical bands', asyn
   assert.equal(ifaces.find(item => item['.name'] === 'default_radioC').encryption, 'sae');
   assert.equal(ifaces.find(item => item['.name'] === 'guest_2g').ssid, 'Guest');
   assert.equal(ifaces.find(item => item['.name'] === 'uplink').ssid, 'Upstream');
+  assert.equal(JSON.stringify(devices), radiosBefore, 'ordinary name/password setup does not apply the opt-in channel profile');
   assert.deepEqual(counters(), { saves: 1, applies: 1 });
 });
 
@@ -116,7 +118,7 @@ test('Quick Wi-Fi menu and ACL stay scoped to wireless configuration', () => {
   assert.deepEqual(acl['zbt-quick-wifi'].read.ubus['zbt.wifi'], [ 'diagnostics' ]);
 });
 
-test('camera compatibility repairs preserved settings without changing credentials or other bands', async () => {
+test('legacy device compatibility applies channel 1 and repairs settings without changing credentials or other bands', async () => {
   const { api, devices, ifaces, counters } = fixture();
   const ap = ifaces.find(row => row['.name'] === 'default_radioA');
   const radio = devices[0];
@@ -131,6 +133,7 @@ test('camera compatibility repairs preserved settings without changing credentia
   assert.equal(ap.ieee80211w, '0');
   assert.equal(ap.ieee80211r, '0');
   assert.equal(ap.wmm, '1');
+  assert.equal(radio.channel, '1');
   assert.equal(radio.htmode, 'HT20');
   assert.equal(radio.legacy_rates, '1');
   assert.equal(radio.cell_density, '0');
@@ -142,7 +145,7 @@ test('camera compatibility repairs preserved settings without changing credentia
   assert.deepEqual(counters(), { saves: 1, applies: 1 });
 });
 
-test('camera compatibility refuses shared MLO and invalid keys before any writes', async () => {
+test('legacy device compatibility refuses shared MLO and invalid keys before any writes', async () => {
   const { api, ifaces, devices, counters } = fixture();
   const ap = ifaces.find(row => row['.name'] === 'default_radioA');
   ap.device = ['radioA', 'radioB', 'radioC'];
@@ -159,7 +162,7 @@ test('camera compatibility refuses shared MLO and invalid keys before any writes
   assert.deepEqual(counters(), { saves: 0, applies: 0 });
 });
 
-test('camera compatibility rejects a selected AP outside LAN without changing Quick Wi-Fi selection', async () => {
+test('legacy device compatibility rejects a selected AP outside LAN without changing Quick Wi-Fi selection', async () => {
   const { api, ifaces, devices, counters } = fixture();
   const ap = ifaces.find(row => row['.name'] === 'default_radioA');
   ap.network = 'camera_vlan';

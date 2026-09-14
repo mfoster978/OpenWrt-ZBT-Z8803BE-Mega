@@ -51,11 +51,24 @@ curl() {
  case "$*" in *"--interface if!$GOOD_HTTP_DEVICE"*) [ -n "$GOOD_HTTP_DEVICE" ] && printf 204 ;; *) return 1 ;; esac
 }
 service() {
+ local attempts
  echo "service $*" >> "$DB/calls"
  case "$1:$2" in
-  hang:4_1|hang:2_1) rm -f "$DB/worker-$2" ;;
-  dial:4_1|dial:2_1) [ "$REGISTER_WORKER" = 0 ] || touch "$DB/worker-$2" ;;
+  hang:4_1|hang:2_1)
+   rm -f "$DB/worker-$2"
+   [ -z "$OLD_WORKER_STOPS_AFTER" ] || echo 0 > "$DB/stopping"
+   ;;
+  dial:4_1|dial:2_1)
+   attempts=$(cat "$DB/dial-attempts-$2" 2>/dev/null || echo 0)
+   attempts=$((attempts + 1)); echo "$attempts" > "$DB/dial-attempts-$2"
+   [ "$REGISTER_WORKER" = 0 ] || [ "$attempts" -lt "\${REGISTER_ON_ATTEMPT:-1}" ] || touch "$DB/worker-$2"
+   ;;
  esac
+}
+kill() {
+ if [ "$*" = '-0 4321' ] && [ -f "$DB/stopping" ]; then
+  [ "$(cat "$DB/stopping")" -lt "$OLD_WORKER_STOPS_AFTER" ]
+ else command kill "$@"; fi
 }
 logger() { echo "log $*" >> "$DB/calls"; }
 ubus() {
@@ -82,7 +95,11 @@ ifup() {
 }
 sleep() {
  echo "sleep $1 power=$(cat "$DB/sys/class/gpio/5g1/value")/$(cat "$DB/sys/class/gpio/5g2/value")" >> "$DB/calls"
- if [ "$1" = 8 ]; then
+ if [ "$1" = 1 ] && [ -f "$DB/stopping" ]; then
+  echo $(( $(cat "$DB/stopping") + 1 )) > "$DB/stopping"
+ fi
+ if [ "$1" = 10 ]; then
+  [ "$INTERRUPT_GPIO_PULSE" != 1 ] || exit 1
   for pair in '5g1 wwan8' '5g2 wwan3'; do set -- $pair
    if [ "$(cat "$DB/sys/class/gpio/$1/value")" = 0 ]; then echo $(( $(cat "$DB/sys/class/net/$2/ifindex") + 1 )) > "$DB/sys/class/net/$2/ifindex"; fi
   done
@@ -103,7 +120,7 @@ watch_slot ${section}`);
     assert.equal((f.calls.match(/service dial /g)||[]).length,1);
     assert.match(f.calls,new RegExp(`service dial ${section}\\n`));
     assert.match(f.calls,new RegExp(`slot=${section} action=worker-repair result=registered`));
-    assert.doesNotMatch(f.calls,/service hang |sleep 8|requesting /);
+    assert.doesNotMatch(f.calls,/service hang |sleep [0-9]+ power=(?:0\/|1\/0)|requesting /);
     assert.ok(fs.existsSync(path.join(f.d,`worker-${section}`)));
     const state=fs.readFileSync(path.join(f.d,`recovery/${section}.state`),'utf8').trim().split(' ');
     assert.equal(state[5],'3','registration must not consume/reset GPIO recovery budget');
@@ -204,9 +221,11 @@ rm "$DB/recovery/4_1.recovering"; echo 0 > "$DB/uci/qmodem.4_1.enable_dial"; zbt
 test('three failed probes trigger only selected GPIO, then explicitly dial; cooldown prevents storms',()=>{
   const f=fixture('echo 0 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; cycle; cycle; cycle; cycle; cycle; cycle');
   assert.equal((f.calls.match(/service hang 4_1/g)||[]).length,1);
-  assert.match(f.calls,/service hang 4_1\nsleep 8 power=0\/1\nservice dial 4_1/);
+  assert.match(f.calls,/service hang 4_1\nsleep 10 power=0\/1\nservice dial 4_1/);
   assert.doesNotMatch(f.calls,/service (?:redial|.*2_1)/);
   assert.equal(fs.readFileSync(path.join(f.d,'sys/class/gpio/5g1/value'),'utf8').trim(),'1');
+  assert.equal(fs.readFileSync(path.join(f.d,'sys/class/net/wwan8/ifindex'),'utf8').trim(),'18');
+  assert.equal(fs.readFileSync(path.join(f.d,'sys/class/net/wwan3/ifindex'),'utf8').trim(),'23');
 });
 test('first confirmed boot outage uses boot grace without an extra action cooldown',()=>{
   const f=fixture('echo 0 > "$DB/clock"; cycle; cycle; grep -q "service " "$DB/calls" && echo premature || :; cycle');
@@ -222,21 +241,55 @@ test('IPv6-only and dual-stack partial success prevent GPIO recovery',()=>{
 });
 test('Modem 2 GPIO recovery leaves Modem 1 alone and explicitly starts Modem 2',()=>{
   const f=fixture('echo 0 > "$DB/uci/modem_watchdog.modem2.redial_attempts"; for n in 1 2 3 4; do zbt_health_probe 2_1 || :; zbt_recovery_check 2_1 modem2; done');
-  assert.match(f.calls,/service hang 2_1\nsleep 8 power=1\/0\nservice dial 2_1/);
+  assert.match(f.calls,/service hang 2_1\nsleep 10 power=1\/0\nservice dial 2_1/);
   assert.doesNotMatch(f.calls,/service .*4_1/);
 });
 test('GPIO recovery registers the persistent dial worker before USB/netdev re-enumeration',()=>{
   const f=fixture('echo 0 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; zbt_netdev() { return 1; }; cycle; cycle; cycle');
-  assert.match(f.calls,/service hang 4_1\nsleep 8 power=0\/1\nservice dial 4_1/);
+  assert.match(f.calls,/service hang 4_1\nsleep 10 power=0\/1\nservice dial 4_1/);
   assert.doesNotMatch(f.calls,/sleep 1 power=/, 'recovery must not time out polling for a netdev before dispatching dial');
   assert.doesNotMatch(f.calls,/service .*2_1/);
 });
 test('recovery does not report dispatch until the persistent slot worker is visible',()=>{
   const f=fixture('echo 0 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; cycle; cycle; cycle',{REGISTER_WORKER:'0'});
-  assert.equal((f.calls.match(/service dial 4_1/g)||[]).length,5);
-  assert.match(f.calls,/worker-registration-failed attempts=5/);
+  assert.equal((f.calls.match(/service dial 4_1/g)||[]).length,30);
+  assert.equal((f.calls.match(/sleep 1 power=1\/1/g)||[]).length,29);
+  assert.match(f.calls,/worker-registration-failed attempts=30/);
   assert.match(f.calls,/action=power_cycle result=incomplete/);
   assert.doesNotMatch(f.calls,/action=power_cycle result=dispatched/);
+});
+test('recovery accepts registration on attempt thirty but refuses to exceed the bounded registration window',()=>{
+  const late=fixture('echo 0 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; cycle; cycle; cycle',{REGISTER_ON_ATTEMPT:'30'});
+  assert.equal((late.calls.match(/service dial 4_1/g)||[]).length,30);
+  assert.equal((late.calls.match(/sleep 1 power=1\/1/g)||[]).length,29);
+  assert.match(late.calls,/action=power_cycle result=worker-registered/);
+  assert.match(late.calls,/action=power_cycle result=dispatched/);
+  assert.doesNotMatch(late.calls,/worker-registration-failed|service .*2_1/);
+  const tooLate=fixture('echo 0 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; cycle; cycle; cycle',{REGISTER_ON_ATTEMPT:'31'});
+  assert.equal((tooLate.calls.match(/service dial 4_1/g)||[]).length,30);
+  assert.match(tooLate.calls,/worker-registration-failed attempts=30/);
+  assert.doesNotMatch(tooLate.calls,/result=worker-registered|result=dispatched/);
+});
+test('recovery waits up to thirty seconds for the old worker without overlapping a live instance',()=>{
+  const body='echo 0 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; touch "$DB/worker-4_1"; cycle; cycle; cycle';
+  const stopped=fixture(body,{OLD_WORKER_STOPS_AFTER:'30'});
+  assert.equal((stopped.calls.match(/sleep 1 power=1\/1/g)||[]).length,30);
+  assert.match(stopped.calls,/service hang 4_1[\s\S]*sleep 10 power=0\/1\nservice dial 4_1/);
+  assert.match(stopped.calls,/action=power_cycle result=dispatched/);
+  const stillLive=fixture(body,{OLD_WORKER_STOPS_AFTER:'31'});
+  assert.equal((stillLive.calls.match(/sleep 1 power=1\/1/g)||[]).length,30);
+  assert.doesNotMatch(stillLive.calls,/service dial|sleep [0-9]+ power=(?:0\/|1\/0)/);
+  assert.match(stillLive.calls,/action=power_cycle result=incomplete/);
+  assert.equal(fs.readFileSync(path.join(stillLive.d,'sys/class/gpio/5g1/value'),'utf8').trim(),'1');
+});
+test('interruption during the ten-second GPIO pulse restores power and clears only its recovery markers',()=>{
+  const f=fixture('echo 0 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; cycle; cycle; cycle',{INTERRUPT_GPIO_PULSE:'1'});
+  assert.match(f.calls,/sleep 10 power=0\/1/);
+  assert.match(f.calls,/action=power_cycle result=incomplete/);
+  assert.doesNotMatch(f.calls,/service dial|service .*2_1/);
+  for (const gpio of ['5g1','5g2']) assert.equal(fs.readFileSync(path.join(f.d,`sys/class/gpio/${gpio}/value`),'utf8').trim(),'1');
+  assert.ok(!fs.existsSync(path.join(f.d,'recovery/4_1.power-off')));
+  assert.ok(!fs.existsSync(path.join(f.d,'recovery/4_1.recovering')));
 });
 test('only an interrupted owned GPIO pulse is restored; manual power-off is preserved',()=>{
   const f=fixture(`echo 0 > "$DB/sys/class/gpio/5g1/value"

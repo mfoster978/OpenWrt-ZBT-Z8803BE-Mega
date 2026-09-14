@@ -40,7 +40,7 @@ The current repair marker is v5:
 | Soft-redial verification window | 60 seconds |
 | Minimum cooldown between attempts | 180 seconds after the attempt |
 | Maximum recovery requests | 3 per physical modem per hour |
-| Power-off pulse / restart dispatch | 8 seconds / immediate exact-slot worker registration |
+| Power-off pulse / restart dispatch | 10 seconds / immediate exact-slot worker registration |
 
 The watchdog reads RX-error growth and QMI child-loss markers. A confirmed QMI
 child loss receives the configured targeted redial first; growing RX errors
@@ -202,6 +202,22 @@ family whose logical state needs repair; it does not invoke a network-service
 restart or change QMI mode, WAN rankings, APNs, radio modes or Wi-Fi settings.
 Worker recreation does not require another destructive recovery attempt.
 The existing RX-error escalation and GPIO safety limits remain in place.
+
+The subsequent shared-session commits `f9bbe17` and `29a46a0` extend the
+selected worker's teardown wait to 30 one-second polls, the GPIO-off interval
+to 10 seconds, and replacement-worker registration to 30 attempts. Each dial
+invocation can itself wait for a stale procd instance, so 30 attempts is not a
+strict 30-second wall-clock limit. This path is shared by both modem slots;
+the supplied hardware recovery observation was on Modem 1.
+
+The optional Quick Wi-Fi action is now named **Apply 2.4 GHz Legacy Device
+Compatibility** and additionally selects channel 1. Its existing WPA2-AES,
+HT20 and legacy-rate settings remain; applying it preserves the network name
+and password and does not change the 5/6 GHz radios. Other APs on the same
+2.4 GHz radio share its channel and radio-mode changes. A kept-configuration
+upgrade does not apply this optional profile automatically. The user's MDVR
+connected after a phone-hotspot connection and return to the router; that
+sequence does not establish that channel 1 alone fixed the device.
 
 Regression tests cover slot isolation, direct IPv4/IPv6 health, LED transitions,
 disabled controls, interrupted pulses, cooldowns, escalation, hourly limits,
