@@ -29,21 +29,13 @@ zbt_recovery_action() (
 	exec 6>"$ZBT_RECOVERY_DIR/action.lock"
 	flock -n 6 || exit 75
 	zbt_5g_lock || exit 75
-	# The connection may have recovered since the parent collected its sample.
 	zbt_health_probe "$section" && exit 0
-	# Missing policy-bypass support is an indeterminate probe, not permission
-	# to reset a modem. Preserve the retry budget until a real sample is possible.
 	[ "$ZBT_HEALTH" = offline ] || exit 75
-	# Active adaptive trials hold this same flock. A crashed trial may leave
-	# its journal; preserve it so the next dial restores the previous mode.
 	mkdir -p "$ZBT_RECOVERY_DIR"
 	path="$ZBT_RECOVERY_DIR/$section.recovering"
-	# $$ is inherited by ash subshells. Read this process's actual PID so a
-	# killed recovery cannot leave a marker pointing at the healthy daemon.
 	read -r owner rest < /proc/self/stat
 	printf '%s\n' "$owner" > "$path"
 	finish() {
-		# A stop during the eight-second pulse must never leave power off.
 		[ "$powered_off" != 1 ] || printf '1\n' > "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value"
 		[ "$(cat "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value" 2>/dev/null)" != 1 ] || rm -f "$ZBT_RECOVERY_DIR/$section.power-off"
 		rm -f "$path"
@@ -55,12 +47,11 @@ zbt_recovery_action() (
 	if [ "$action" = power_cycle ]; then
 		[ -w "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value" ] || exit 1
 	fi
-	# Block new starts before stopping the old instance, including USB hotplug.
 	pid=$(ubus -t 5 call service list '{"name":"qmodem_network"}' | jq -r --arg n "modem_$section" '.qmodem_network.instances[$n].pid // empty')
 	case "$pid" in ''|*[!0-9]*|0|1) pid='' ;; esac
 	/etc/init.d/qmodem_network hang "$section" >/dev/null 2>&1 || true
 	while [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; do
-		[ "$tries" -lt 20 ] || exit 1
+		[ "$tries" -lt 30 ] || exit 1
 		sleep 1; tries=$((tries + 1))
 	done
 	zbt_recovery_allowed "$section" || exit 1
@@ -69,27 +60,19 @@ zbt_recovery_action() (
 		printf '%s\n' "$owner" > "$ZBT_RECOVERY_DIR/$section.power-off"
 		printf '0\n' > "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value" || exit 1
 		[ "$(cat "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value")" = 0 ] || exit 1
-		# The RM551E live recovery needed a full eight-second low interval.
-		# Shorter pulses can leave its USB/baseband state intact and reproduce
-		# the same dead data path after an apparent power-cycle.
-		sleep 8
+		# RM551E hardware testing showed that eight seconds can leave the broken
+		# QMI receive state intact. Ten seconds reliably forces USB/baseband reset.
+		sleep 10
 		printf '1\n' > "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value" || exit 1
 		[ "$(cat "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value")" = 1 ] || exit 1
 		powered_off=0
 		rm -f "$ZBT_RECOVERY_DIR/$section.power-off"
 	fi
 	[ "$action" != disconnect ] || exit 0
-	# Register the selected slot immediately after its old instance is gone and
-	# (for GPIO recovery) power is restored. qmodem-start.sh is deliberately a
-	# persistent hardware-readiness worker, so waiting here for a new netdev made
-	# recovery silently give up before the modem completed USB enumeration.
 	zbt_recovery_allowed "$section" || exit 1
 	rm -f "$path"
-	# A zero exit from rc_procd only proves that the request was accepted. Verify
-	# that procd exposes a running persistent slot worker; retry registration a
-	# few times without waiting for slow USB enumeration or touching the peer.
 	tries=0
-	while [ "$tries" -lt 5 ]; do
+	while [ "$tries" -lt 30 ]; do
 		/etc/init.d/qmodem_network dial "$section" >/dev/null 2>&1 || true
 		registered=$(zbt_recovery_worker_pid "$section" 2>/dev/null || true)
 		if [ -n "$registered" ]; then
@@ -97,14 +80,13 @@ zbt_recovery_action() (
 			exit 0
 		fi
 		tries=$((tries + 1))
-		[ "$tries" -ge 5 ] || sleep 1
+		[ "$tries" -ge 30 ] || sleep 1
 	done
 	logger -t modem-watchdog "slot=$section action=$action result=worker-registration-failed attempts=$tries"
 	printf '%s\n' "$owner" > "$path"
 	exit 1
 )
 zbt_recovery_resume() (
-	# Finish only our interrupted pulse, never an unmarked manual power-off.
 	local config_section="$1" owner rest
 	read -r owner 2>/dev/null < "$ZBT_RECOVERY_DIR/$1.power-off" || exit 0
 	case "$owner" in ''|*[!0-9]*|0|1) exit 0 ;; esac
@@ -131,7 +113,6 @@ zbt_recovery_check() {
 	if [ -f "$ZBT_RECOVERY_DIR/$section.state" ]; then
 		read -r fails good last attempts window cycles oldrx oldindex < "$ZBT_RECOVERY_DIR/$section.state"
 	fi
-	# State is private RAM, but reject truncated/interrupted records safely.
 	for item in "$fails" "$good" "$last" "$attempts" "$window" "$cycles" "$oldrx" "$oldindex"; do
 		case "$item" in ''|*[!0-9]*) fails=0; good=0; last=$now; attempts=0; window=$now; cycles=0; oldrx=0; oldindex=0 ;; esac
 	done
@@ -145,9 +126,6 @@ zbt_recovery_check() {
 	cooldown=$(zbt_recovery_uint "$(zbt_recovery_get global.cooldown_seconds)" 180 180 3600)
 	grace=$(zbt_recovery_uint "$(zbt_recovery_get global.boot_grace_seconds)" 60 60 600)
 	limit=$(zbt_recovery_uint "$(zbt_recovery_get "$key.redial_attempts")" 1 0 2)
-	# A soft redial is deliberately verified sooner than a GPIO reset.  If the
-	# same slot still has no direct Internet, escalate without waiting for the
-	# destructive-action storm cooldown.
 	verify=$(zbt_recovery_uint "$(zbt_recovery_get global.redial_verify_seconds)" 60 30 180)
 	if [ "$attempts" -gt 0 ] && [ "$attempts" -le "$limit" ]; then cooldown=$verify; fi
 	if [ "$ZBT_HEALTH" = online ]; then
@@ -159,8 +137,6 @@ zbt_recovery_check() {
 		good=0
 	fi
 	[ $((now - window)) -lt 3600 ] || { window=$now; cycles=0; }
-	# Every destructive request is bounded, serialized with radio changes,
-	# and gated on current direct failures, never on an old mwan3 status.
 	if [ "$ZBT_HEALTH" = offline ] && [ "$fails" -ge "$threshold" ] &&
 		[ "$now" -ge "$grace" ] && { [ "$last" = 0 ] || [ $((now - last)) -ge "$cooldown" ]; } &&
 		[ "$cycles" -lt 3 ]; then
@@ -168,7 +144,6 @@ zbt_recovery_check() {
 		if [ "$action" = power_cycle ] && [ "$attempts" -lt "$limit" ] && [ "$reason" != rx_errors_growing ]; then action=redial; fi
 		case "$action" in
 			power_cycle|redial|disconnect)
-				# A busy adaptive worker is not an attempt and consumes no budget.
 				if (config_section="$section"; zbt_5g_lock && zbt_5g_unlock); then
 					previous_last=$last; previous_fails=$fails
 					last=$now; attempts=$((attempts + 1)); cycles=$((cycles + 1)); fails=0
