@@ -172,4 +172,3 @@ zbt_qmi_publish 4 lan || echo rejected-alias
   assert.equal(result.out, 'rejected-slot\nrejected-family\nrejected-alias');
   assert.equal(result.events, '');
 });
-
