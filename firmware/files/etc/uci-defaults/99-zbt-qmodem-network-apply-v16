@@ -1,39 +1,47 @@
 #!/bin/sh
 # QModem's Network Configuration view saved UCI changes and then reloaded the
-# dial service without asking LuCI to apply the staged changes. Patch the pinned
-# view in-place so Save & Apply commits through LuCI first, then reloads QModem.
+# dial service itself. Replace that override with LuCI's normal Save & Apply
+# lifecycle, then reload QModem only after the apply promise has completed.
 set -eu
 file=/www/luci-static/resources/view/qmodem/network_config.js
 [ -f "$file" ] || exit 0
 
-if grep -Fq "return ui.changes.apply(mode == '0');" "$file"; then
+if grep -Fq "this.super('handleSaveApply', arguments)" "$file"; then
 	exit 0
 fi
 
-count=$(grep -Fc "return callInitAction('qmodem_network', 'reload');" "$file" || true)
+count=$(grep -Fc "handleSaveApply: function(ev, mode)" "$file" || true)
 [ "$count" = 1 ] || {
-	logger -t zbt-qmodem-ui "network Save & Apply patch skipped: expected one pinned reload handler, found $count"
+	logger -t zbt-qmodem-ui "network Save & Apply patch skipped: expected one pinned handler, found $count"
 	exit 1
 }
 
 tmp="$file.zbt.$$"
 awk '
-	/index=never-match/ { next }
-	/^[[:space:]]*return callInitAction\('\''qmodem_network'\'', '\''reload'\''\);[[:space:]]*$/ {
-		print "\t\t\treturn ui.changes.apply(mode == '\''0'\'');"
-		print "\t\t}).then(function() {"
+	BEGIN { replacing=0 }
+	/^[[:space:]]*handleSaveApply: function\(ev, mode\) \{/ {
+		print "\thandleSaveApply: function(ev, mode) {"
+		print "\t\tvar self = this;"
+		print "\t\treturn this.super('\''handleSaveApply'\'', arguments).then(function() {"
 		print "\t\t\treturn callInitAction('\''qmodem_network'\'', '\''reload'\'');"
+		print "\t\t});"
+		print "\t},"
+		replacing=1
+		next
+	}
+	replacing {
+		if ($0 ~ /^[[:space:]]*},[[:space:]]*$/) replacing=0
 		next
 	}
 	{ print }
 ' "$file" > "$tmp"
 
-[ "$(grep -Fc "return ui.changes.apply(mode == '0');" "$tmp" || true)" = 1 ] || {
+[ "$(grep -Fc "this.super('handleSaveApply', arguments)" "$tmp" || true)" = 1 ] || {
 	rm -f "$tmp"
 	logger -t zbt-qmodem-ui 'network Save & Apply patch failed validation'
 	exit 1
 }
 
 mv -f "$tmp" "$file"
-logger -t zbt-qmodem-ui 'network Save & Apply now applies LuCI changes before reloading QModem'
+logger -t zbt-qmodem-ui 'network Save & Apply now waits for LuCI apply before reloading QModem'
 exit 0
