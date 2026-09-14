@@ -435,6 +435,52 @@ cat "$DB/events"
   assert.equal(events.split('replacement-start').length - 1, 1, 'only the attempt after old cleanup may dial');
 });
 
+for (const stage of ['before-spawn', 'before-pid']) {
+  test(`a stop arriving ${stage} cannot leave an un-signalled dialer behind`, () => {
+    const dir = sandbox();
+    fs.writeFileSync(path.join(dir, 'dialer'), `
+trap 'trap "" TERM; echo cleanup-start >> "$DB/events"; busybox sleep 0.15; echo cleanup-done >> "$DB/events"; exit 0' TERM
+echo child-started >> "$DB/events"
+touch "$DB/child-ready"
+while :; do busybox sleep 0.02; done
+`);
+    let starter = qmodemStarter()
+      .replace('exec /usr/share/qmodem/modem_dial.sh', 'exec busybox sh "$DB/dialer"')
+      .replaceAll('/var/lock/', dir + '/');
+    if (stage === 'before-pid') {
+      starter = starter.replace('\tzbt_qmodem_child=$!', () => `
+while [ ! -f "$DB/child-ready" ]; do busybox sleep 0.01; done
+kill -TERM $$
+echo stop-received >> "$DB/events"
+\tzbt_qmodem_child=$!`);
+    }
+    starter += `
+zbt_qmodem_armed() { return 0; }
+zbt_qmodem_ready() { return 0; }
+zbt_qmodem_recovery_busy() { return 1; }
+zbt_qmodem_launch_lock() {
+  exec 8>"$DB/start.lock"
+  if [ "$STAGE" = before-spawn ]; then
+    kill -TERM $$
+    echo stop-received >> "$DB/events"
+  fi
+  return 0
+}
+logger() { :; }
+zbt_qmodem_start 4_1
+echo worker-exited >> "$DB/events"
+cat "$DB/events"
+`;
+    const events = shell(starter, { DB: dir, STAGE: stage });
+    if (stage === 'before-spawn') {
+      assert.equal(events, 'stop-received\nworker-exited', 'a stopped worker must not create a child');
+    } else {
+      assert.equal(events, 'child-started\nstop-received\ncleanup-start\ncleanup-done\nworker-exited',
+        'a child created before its PID was recorded must receive the stop and finish cleanup');
+    }
+  });
+}
+
 test('boot readiness worker rejects the peer AT port and exits if enable_dial is cleared', () => {
   const f = usbFixture(), stopped = path.join(f.dir, 'disabled');
   const out = shell(qmodemStarter() + `

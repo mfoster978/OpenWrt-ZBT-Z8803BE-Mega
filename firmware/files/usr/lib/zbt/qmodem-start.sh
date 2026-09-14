@@ -94,11 +94,21 @@ zbt_qmodem_launch() {
 		return 75
 	fi
 	zbt_qmodem_launch_lock || { exec 1003>&-; return 75; }
+	# A stop may arrive while waiting for the startup lock, before a child
+	# exists to receive the forwarded signal. Do not spawn after that stop.
+	if [ "$zbt_qmodem_stopping" != 0 ]; then
+		exec 8>&-
+		exec 1003>&-
+		return 75
+	fi
 	(
 		exec 8>&-
 		exec /usr/share/qmodem/modem_dial.sh "$section" dial
 	) &
 	zbt_qmodem_child=$!
+	# Cover the smaller fork-to-PID-assignment window too. The first trap may
+	# have seen no child, so forward the recorded stop once ownership is known.
+	[ "$zbt_qmodem_stopping" = 0 ] || zbt_qmodem_stop
 	# Do not let the peer's first set_if/CM startup overlap this one.  A missing
 	# SIM or carrier still releases the peer after one bounded minute.
 	while zbt_qmodem_child_alive && [ "$waited" -lt 60 ]; do

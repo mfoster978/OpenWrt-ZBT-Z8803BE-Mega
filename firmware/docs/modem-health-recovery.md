@@ -166,6 +166,9 @@ including when another TERM arrives during cleanup. A per-slot inherited
 lifetime lock also prevents replacement while an old child is still cleaning
 up after procd forcibly kills the parent. A second real-process test verifies
 that this defers the same slot without blocking its peer.
+Stop requests are also checked immediately before launch and after the child
+PID is recorded, so a TERM during startup cannot leave a new un-signalled
+dialer running after its worker exits.
 
 Health probes now use the pinned mwan3 socket wrapper with the physical device,
 source address and configured policy-bypass mark. Real Linux packet tests found
