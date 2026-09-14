@@ -14,6 +14,10 @@ assert.ok(mockSockopt, 'host libc is required for mocked socket environment');
 const lib = ['dual-modem.sh', 'modem-health.sh', '5g-state.sh', 'modem-recovery.sh'].map(p =>
   source('firmware/files/usr/lib/zbt/' + p).replace(/^\. \/usr\/lib\/zbt\/.*$/gm, '')).join('\n')
   .replaceAll('/etc/init.d/qmodem_network', 'service');
+const daemon = source('firmware/feeds/luci-app-modem-watchdog/root/usr/sbin/modem-watchdog')
+  .replace(/^\. \/usr\/lib\/zbt\/modem-recovery.sh$/m, '')
+  .replace(/\ncase "\$1" in[\s\S]*$/, '')
+  .replaceAll('/etc/init.d/qmodem_network', 'service');
 function fixture(body, options={}) {
   const d = fs.mkdtempSync(path.join(temp, 'case-'));
   const write = (p, v) => { fs.mkdirSync(path.dirname(path.join(d,p)),{recursive:true}); fs.writeFileSync(path.join(d,p), v+'\n'); };
@@ -55,13 +59,26 @@ service() {
 }
 logger() { echo "log $*" >> "$DB/calls"; }
 ubus() {
+ local section comma='' namespace
+ case "$*" in
+  *'call network.interface.'*' status')
+   namespace="$4"; namespace="\${namespace#network.interface.}"
+   cat "$DB/netifd-$namespace" 2>/dev/null || echo '{"up":false,"available":false}'
+   return ;;
+ esac
+ printf '{"qmodem_network":{"instances":{'
  for section in 4_1 2_1; do
   [ ! -f "$DB/worker-$section" ] || {
-   printf '{"qmodem_network":{"instances":{"modem_%s":{"running":true,"pid":4321}}}}\n' "$section"
-   return
+   printf '%s"modem_%s":{"running":true,"pid":4321}' "$comma" "$section"
+   comma=,
   }
  done
- echo '{}'
+ printf '}}}\n'
+}
+ifup() {
+ echo "ifup $*" >> "$DB/calls"
+ [ "$REBIND_STAYS_DOWN" != 1 ] || return 0
+ printf '{"up":true,"available":true}\n' > "$DB/netifd-$1"
 }
 sleep() {
  echo "sleep $1 power=$(cat "$DB/sys/class/gpio/5g1/value")/$(cat "$DB/sys/class/gpio/5g2/value")" >> "$DB/calls"
@@ -73,11 +90,76 @@ sleep() {
 }
 cycle() { zbt_health_probe 4_1 || :; zbt_health_save 4_1; zbt_recovery_check 4_1 modem1; echo $(( $(cat "$DB/clock") + 30 )) > "$DB/clock"; }
 `;
-  const result=spawnSync('busybox',['sh','-c',lib+'\n'+mocks+'\n'+body], {encoding:'utf8',timeout:10000,
+  const result=spawnSync('busybox',['sh','-c',lib+'\n'+daemon+'\n'+mocks+'\n'+body], {encoding:'utf8',timeout:10000,
     env:{...process.env,DB:d,ZBT_SYSFS:path.join(d,'sys'),ZBT_HEALTH_DIR:path.join(d,'health'),ZBT_5G_STATE:path.join(d,'radio'),ZBT_RECOVERY_DIR:path.join(d,'recovery'),ZBT_MWAN_SOCKOPT:mockSockopt,GOOD_FAMILY:'-4',GOOD_DEVICE:'',REGISTER_WORKER:'1',...options}});
   assert.ifError(result.error); assert.equal(result.status,0,result.stderr+result.stdout);
   return {d,out:result.stdout,calls:fs.existsSync(path.join(d,'calls'))?fs.readFileSync(path.join(d,'calls'),'utf8'):''};
 }
+test('each daemon recreates its missing enabled dial worker after exhausting destructive recovery budget',()=>{
+  for (const section of ['4_1','2_1']) {
+    const f=fixture(`printf '3 0 100 3 0 3 0 17\\n' > "$DB/recovery/${section}.state"
+sleep() { [ "$1" != 20 ] || exit 0; }
+watch_slot ${section}`);
+    assert.equal((f.calls.match(/service dial /g)||[]).length,1);
+    assert.match(f.calls,new RegExp(`service dial ${section}\\n`));
+    assert.match(f.calls,new RegExp(`slot=${section} action=worker-repair result=registered`));
+    assert.doesNotMatch(f.calls,/service hang |sleep 8|requesting /);
+    assert.ok(fs.existsSync(path.join(f.d,`worker-${section}`)));
+    const state=fs.readFileSync(path.join(f.d,`recovery/${section}.state`),'utf8').trim().split(' ');
+    assert.equal(state[5],'3','registration must not consume/reset GPIO recovery budget');
+  }
+});
+test('dial-worker repair leaves live or administratively disabled slots alone',()=>{
+  const live=fixture('touch "$DB/worker-4_1" "$DB/worker-2_1"; ensure_slot_worker 4_1; ensure_slot_worker 2_1');
+  assert.doesNotMatch(live.calls,/service /);
+  for (const body of [
+    'echo 0 > "$DB/uci/qmodem.main.enable_dial"',
+    'echo 0 > "$DB/uci/qmodem.4_1.enable_dial"',
+    'echo 0 > "$DB/sys/class/gpio/5g1/value"',
+    'echo 1 > "$DB/uci/qmodem.4_1.en_bridge"',
+  ]) {
+    const disabled=fixture(`${body}; ensure_slot_worker 4_1`);
+    assert.doesNotMatch(disabled.calls,/service /);
+  }
+  const isolated=fixture('touch "$DB/worker-2_1"; ensure_slot_worker 4_1; ensure_slot_worker 2_1');
+  assert.match(isolated.calls,/service dial 4_1/);
+  assert.doesNotMatch(isolated.calls,/service .*2_1/);
+});
+test('accepted dial request without a registered worker is not reported as repaired',()=>{
+  const f=fixture('ensure_slot_worker 4_1',{REGISTER_WORKER:'0'});
+  assert.match(f.calls,/service dial 4_1/);
+  assert.doesNotMatch(f.calls,/result=registered/);
+});
+test('netifd rebound targets only directly healthy families and requires both up and available',()=>{
+  for (const [section,family,interfaceName] of [['4_1','4','4_1'],['4_1','6','4_1v6'],['2_1','4','2_1'],['2_1','6','2_1v6']]) {
+    for (const status of ['{"up":false,"available":true}','{"up":true,"available":false}','invalid-json']) {
+      const f=fixture(`printf '%s\\n' '${status}' > "$DB/netifd-${interfaceName}"
+ZBT_HEALTH4=offline; ZBT_HEALTH6=absent; ZBT_HEALTH${family}=online
+repair_netifd_publication ${section}`);
+      assert.equal((f.calls.match(/^ifup /gm)||[]).length,1);
+      assert.match(f.calls,new RegExp(`^ifup ${interfaceName}$`,'m'));
+      assert.match(f.calls,new RegExp(`slot=${section} iface=${interfaceName} action=netifd-rebind result=verified`));
+    }
+  }
+});
+test('netifd rebound is idempotent and neither repairs unproven families nor reports failed readback as success',()=>{
+  const healthy=fixture(`ZBT_HEALTH4=online; ZBT_HEALTH6=online
+for interface in 4_1 4_1v6 2_1 2_1v6; do printf '{"up":true,"available":true}\\n' > "$DB/netifd-$interface"; done
+repair_netifd_publication 4_1; repair_netifd_publication 2_1`);
+  assert.doesNotMatch(healthy.calls,/ifup |netifd-rebind/);
+  for (const health of ['offline','absent','unknown']) {
+    const unproven=fixture(`ZBT_HEALTH4=${health}; ZBT_HEALTH6=${health}; repair_netifd_publication 4_1; repair_netifd_publication 2_1`);
+    assert.doesNotMatch(unproven.calls,/ifup |netifd-rebind/);
+  }
+  const stale=fixture('ZBT_HEALTH4=online; ZBT_HEALTH6=offline; repair_netifd_publication 4_1',{REBIND_STAYS_DOWN:'1'});
+  assert.match(stale.calls,/ifup 4_1/);
+  assert.doesNotMatch(stale.calls,/result=verified/);
+  const independent=fixture(`ZBT_HEALTH4=online; ZBT_HEALTH6=offline
+repair_netifd_publication 4_1; repair_netifd_publication 4_1
+ZBT_HEALTH4=offline; ZBT_HEALTH6=online
+repair_netifd_publication 2_1; repair_netifd_publication 2_1`);
+  assert.deepEqual(independent.calls.match(/^ifup .*$/gm),['ifup 4_1','ifup 2_1v6']);
+});
 test('direct probes cannot succeed through the working peer; either family can prove this slot',()=>{
   const f=fixture('zbt_health_probe 4_1 || :; echo "$ZBT_HEALTH:$ZBT_HEALTH4:$ZBT_HEALTH6"; zbt_health_probe 2_1 || :; echo "$ZBT_HEALTH"',{GOOD_DEVICE:'wwan3'});
   assert.equal(f.out,'offline:offline:absent\nonline\n');

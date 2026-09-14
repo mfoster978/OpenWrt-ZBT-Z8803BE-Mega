@@ -263,11 +263,12 @@ test('disabled/removed modem clears stale watchdog measurements', () => {
   assert.equal(fs.existsSync(path.join(dir, '2_1.state')), false);
 });
 
-test('QModem starts both instances without nested procd transactions; redial targets one', () => {
+test('QModem starts both instances without nested procd transactions; dial and hang target one', () => {
   let svc = source('firmware/files/etc/init.d/qmodem_network').replace('mkdir -p /var/run/qmodem', ':');
   const mocks = `
 extra_command() { :; }
 armed() { return 0; }
+ubus() { echo '{}'; }
 procd_open_instance() { echo "open:$1"; }
 procd_set_param() { [ "$1" != command ] || echo "command:$2:$3"; }
 procd_close_instance() { :; }
@@ -506,19 +507,69 @@ test('QModem stopped instance uses the marker expected by upstream RPC', () => {
   assert.equal(shell('extra_command() { :; }\n' + svc + '\nubus() { echo "{}"; }; modem_status 2_1'), 'modem_2_1 Not Running');
 });
 
-test('targeted redial waits for old cleanup and refuses overlapping dialers', () => {
+function qmodemInstanceFixture(action, options = {}) {
+  const dir = sandbox(), calls = path.join(dir, 'calls');
+  fs.writeFileSync(calls, '');
   const svc = source('firmware/files/etc/init.d/qmodem_network');
   const mocks = `
-extra_command() { :; }
-ubus() { echo '{"qmodem_network":{"instances":{"modem_2_1":{"pid":201}}}}'; }
-hang() { [ "$1" = 2_1 ]; }
-dial() { echo "dial:$1:$attempts"; }
-kill() { [ "$2" = 201 ] && [ "$attempts" -lt "$WAIT_SECONDS" ]; }
-sleep() { :; }
+elapsed=0
+armed() { return 0; }
+# procd keeps the named node visible until asynchronous deletion finishes.
+# The other slot remains live throughout and must not block this slot's dial.
+ubus() {
+  if [ "$DELETE_AFTER" = never ] || [ "$elapsed" -lt "$DELETE_AFTER" ]; then
+    printf '{"qmodem_network":{"instances":{"modem_%s":{"running":%s},"modem_%s":{"running":true,"pid":301}}}}\\n' "$TARGET" "$RUNNING" "$PEER"
+  else
+    printf '{"qmodem_network":{"instances":{"modem_%s":{"running":true,"pid":301}}}}\\n' "$PEER"
+  fi
+}
+procd_kill() { printf 'kill:%s:%s\\n' "$1" "$2" >> "$CALLS"; }
+rc_procd() {
+  printf 'transaction:%s:%s\\n' "$1" "$2" >> "$CALLS"
+  echo "dial:$2:$elapsed"
+}
+sleep() { elapsed=$((elapsed + 1)); }
 logger() { :; }
 `;
-  assert.equal(shell('extra_command() { :; }\n' + svc + mocks + '\nredial 2_1', { WAIT_SECONDS: '2' }), 'dial:2_1:2');
-  assert.equal(shell('extra_command() { :; }\n' + svc + mocks + '\nredial 2_1 || echo refused', { WAIT_SECONDS: '30' }), 'refused');
+  const out = shell('extra_command() { :; }\n' + svc + mocks + `
+${action} "$TARGET" || echo refused:$elapsed
+echo elapsed:$elapsed`, {
+    TARGET: '2_1', PEER: '4_1', RUNNING: 'false', DELETE_AFTER: '2', CALLS: calls, ...options
+  });
+  return { out, calls: fs.readFileSync(calls, 'utf8').trim() };
+}
+
+test('targeted redial waits for named-instance deletion, not disappearance of its PID', () => {
+  const result = qmodemInstanceFixture('redial');
+  assert.equal(result.out, 'dial:2_1:2\nelapsed:2');
+  assert.equal(result.calls, 'kill:qmodem_network:modem_2_1\ntransaction:add_modem:2_1',
+    'the still-running peer must neither be stopped nor re-registered');
+  assert.equal(qmodemInstanceFixture('redial', { DELETE_AFTER: '30' }).out,
+    'dial:2_1:30\nelapsed:30', 'deletion on the final allowed poll can proceed');
+});
+
+test('targeted redial refuses a permanently registered old instance after a bounded wait', () => {
+  const result = qmodemInstanceFixture('redial', { DELETE_AFTER: 'never' });
+  assert.equal(result.out, 'refused:30\nelapsed:30');
+  assert.equal(result.calls, 'kill:qmodem_network:modem_2_1', 'no overlapping replacement is submitted');
+});
+
+test('targeted dial waits for stale node removal while leaving the live peer untouched', () => {
+  const result = qmodemInstanceFixture('dial', { TARGET: '4_1', PEER: '2_1' });
+  assert.equal(result.out, 'dial:4_1:2\nelapsed:2');
+  assert.equal(result.calls, 'transaction:add_modem:4_1');
+});
+
+test('targeted dial is an immediate no-op for an already running worker', () => {
+  const result = qmodemInstanceFixture('dial', { RUNNING: 'true', DELETE_AFTER: 'never' });
+  assert.equal(result.out, 'elapsed:0');
+  assert.equal(result.calls, '', 'a live worker must not be stopped or re-registered');
+});
+
+test('targeted dial refuses a permanently stale node without affecting either slot', () => {
+  const result = qmodemInstanceFixture('dial', { DELETE_AFTER: 'never' });
+  assert.equal(result.out, 'refused:30\nelapsed:30');
+  assert.equal(result.calls, '');
 });
 
 const bands = source('firmware/files/usr/lib/zbt/quectel-bands.sh');

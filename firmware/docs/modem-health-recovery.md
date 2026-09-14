@@ -186,6 +186,23 @@ they do not establish that the user's intermittent disconnect is cured.
 
 ## Validation and remaining physical checks
 
+### GitHub recovery follow-up from the shared router session
+
+Commits `cd2bfd1`, `e83dc73` and `ef385d6` add named-procd-instance deletion
+checks before replacement, automatic recreation of a missing enabled slot
+worker, and a netifd rebind when that family's direct probes work but its
+logical interface remains unavailable/down. The shared session reports that a
+real GPIO cycle cleared growing RX errors, after which `ifup 4_1` and
+`ifup 4_1v6` restored publication and the primary failover policies. It does
+not establish the underlying cause of the RX-error storm or a new MDVR fix.
+
+The standard `ifup` command reloads network configuration before cycling the
+requested interface. The new repair only invokes it for a directly reachable
+family whose logical state needs repair; it does not invoke a network-service
+restart or change QMI mode, WAN rankings, APNs, radio modes or Wi-Fi settings.
+Worker recreation does not require another destructive recovery attempt.
+The existing RX-error escalation and GPIO safety limits remain in place.
+
 Regression tests cover slot isolation, direct IPv4/IPv6 health, LED transitions,
 disabled controls, interrupted pulses, cooldowns, escalation, hourly limits,
 adaptive lock exclusion, external address publication and actual ARM64 UCI
