@@ -5,20 +5,49 @@
 umask 077
 mkdir -p "$ZBT_RECOVERY_DIR"
 
+worker_running() {
+	ubus -t 5 call service list '{"name":"qmodem_network"}' 2>/dev/null |
+		jq -e --arg n "modem_$1" '.qmodem_network.instances[$n].running == true' >/dev/null 2>&1
+}
+
+ensure_slot_worker() {
+	local section="$1"
+	zbt_modem_enabled "$section" || return 0
+	worker_running "$section" && return 0
+	/etc/init.d/qmodem_network dial "$section" >/dev/null 2>&1 || return 0
+	if worker_running "$section"; then
+		logger -t modem-watchdog "slot=$section action=worker-repair result=registered"
+	fi
+}
+
+repair_netifd_publication() {
+	local section="$1" interface status family_state
+	for interface in "$section" "${section}v6"; do
+		if [ "$interface" = "$section" ]; then family_state=$ZBT_HEALTH4; else family_state=$ZBT_HEALTH6; fi
+		[ "$family_state" = online ] || continue
+		status=$(ubus -t 3 call "network.interface.$interface" status 2>/dev/null || true)
+		printf '%s' "$status" | jq -e '.up == true and .available == true' >/dev/null 2>&1 && continue
+		# A real GPIO recovery re-enumerates wwan with a new ifindex. CM can pass
+		# traffic before netifd notices the replacement device; a targeted ifup
+		# rebinds the generated logical interface without touching the peer modem.
+		ifup "$interface" >/dev/null 2>&1 || true
+		status=$(ubus -t 3 call "network.interface.$interface" status 2>/dev/null || true)
+		if printf '%s' "$status" | jq -e '.up == true and .available == true' >/dev/null 2>&1; then
+			logger -t modem-watchdog "slot=$section iface=$interface action=netifd-rebind result=verified"
+		fi
+	done
+}
+
 watch_slot() {
 	local section="$1" key=modem1 interval gate previous_gate=''
 	[ "$section" != 2_1 ] || key=modem2
 	exec 7>"$ZBT_RECOVERY_DIR/$section.worker.lock"
 	flock -n 7 || exit 0
-	# Also inherit the legacy per-check exclusion so a recovery child from the
-	# replaced single-worker generation must finish before this worker starts.
 	exec 8>"$ZBT_RECOVERY_DIR/$section.check.lock"
 	flock -n 8 || exit 0
 	trap 'exit 0' INT TERM
 	logger -t modem-watchdog "slot=$section action=worker result=started"
 	while :; do
-		# Log every gate transition. A service that is alive but forbidden to
-		# recover must never again look like a functioning watchdog.
 		zbt_slot "$section" || exit 2
 		gate="main_dial=$(uci -q get qmodem.main.enable_dial 2>/dev/null || echo missing) slot_dial=$(uci -q get qmodem.$section.enable_dial 2>/dev/null || echo missing) slot_state=$(uci -q get qmodem.$section.state 2>/dev/null || echo missing) power=$(cat "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value" 2>/dev/null || echo missing) recovery=$(zbt_recovery_get global.enabled) actions=$(zbt_recovery_get global.actions_enabled) slot_recovery=$(zbt_recovery_get $key.enabled) configured_action=$(zbt_recovery_get $key.action)"
 		if [ "$gate" != "$previous_gate" ]; then
@@ -26,11 +55,10 @@ watch_slot() {
 			previous_gate=$gate
 		fi
 		zbt_recovery_resume "$section"
+		ensure_slot_worker "$section"
 		zbt_health_probe "$section" || true
 		zbt_health_save "$section"
-		# Synchronous per-slot state means an action cannot be lost when the
-		# coordinator or the other modem is busy. The global action lock still
-		# serializes destructive GPIO operations.
+		[ "$ZBT_HEALTH" != online ] || repair_netifd_publication "$section"
 		zbt_recovery_check "$section" "$key"
 		interval=$(zbt_recovery_uint "$(zbt_recovery_get global.interval_seconds)" 20 10 60)
 		sleep "$interval"
@@ -46,8 +74,6 @@ coordinate() {
 	logger -t modem-watchdog 'action=coordinator result=started'
 	while :; do
 		/usr/sbin/zbt-modem-led-poller once >/dev/null 2>&1
-		# Direct modem tests can pass while the installed failover policy rejects
-		# clients. This path never owns or delays a slot recovery worker.
 		/usr/sbin/zbt-mwan-apply
 		winner=$(zbt_mwan_winner 2>/dev/null || true)
 		/usr/sbin/zbt-mwan-failback "$winner"
