@@ -274,7 +274,7 @@ The safe defaults are:
 | Recovery limit | 3 attempts per modem per hour |
 | Redial-first attempts | 1 (user-selectable 0 or 2) |
 
-Defaults migrate once, including kept configurations. Later user opt-outs are preserved. Working IPv4 **or** IPv6 prevents a whole-modem reset; three good observations clear a failure streak. Health collection continues for LEDs with recovery off. Read the [recovery safeguards and target requirements](firmware/docs/modem-health-recovery.md) and use `zbt-mwan-diagnostics` to inspect shared Wi-Fi/Ethernet routing.
+Defaults migrate once, including kept configurations. The corrective v4 migration re-enables recovery once for affected installations where only the health/LED worker was active; opt-outs made after that marker are preserved. Modem 1 and Modem 2 have independent recovery workers, while LED/MultiWAN reconciliation runs separately and cannot stall them. Working IPv4 **or** IPv6 prevents a whole-modem reset; three good observations clear a failure streak. Health collection continues for LEDs with recovery off. Read the [recovery safeguards and target requirements](firmware/docs/modem-health-recovery.md) and use `zbt-mwan-diagnostics` to inspect shared Wi-Fi/Ethernet routing.
 
 The separate interactive Speed Test Utility uses Speedtest.net servers and **can consume hundreds of MB or exceed 1 GB per run**; it requires an explicit data-use confirmation. It does not alter the MWAN priority policy.
 

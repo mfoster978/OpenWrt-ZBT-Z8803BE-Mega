@@ -107,7 +107,9 @@ eval "$(sed '/^\/etc\/init.d\/zbt-5g-adaptive enable$/d; /^exit 0$/d' "$MEGA_TES
 [ "$(uci get system.zbt_5g_policy.version)" = 2 ]
 uci set qmodem.4_1.zbt_5g_policy=sa
 uci commit qmodem
-eval "$(sed '/^\/etc\/init.d\/zbt-5g-adaptive enable$/d; /^exit 0$/d' "$MEGA_TEST_REPO/firmware/files/etc/uci-defaults/99-zbt-5g-adaptive-v2")"
+# The version guard intentionally exits its calling shell. Run an idempotence
+# check in a subshell so the rest of this migration suite is still exercised.
+( eval "$(sed '/^\/etc\/init.d\/zbt-5g-adaptive enable$/d; /^exit 0$/d' "$MEGA_TEST_REPO/firmware/files/etc/uci-defaults/99-zbt-5g-adaptive-v2")" )
 [ "$(uci get qmodem.4_1.zbt_5g_policy)" = sa ]
 echo 'PASS: actual ARM64 UCI repairs failover and removes implicit adaptive mode while preserving explicit radio policies'
 
@@ -135,6 +137,26 @@ eval "$(sed '/^\/etc\/init.d\/modem_watchdog /d; /^exit 0$/d' "$MEGA_TEST_REPO/f
 [ "$(uci get modem_watchdog.global.recovery_v3)" = 1 ]
 [ "$(uci get modem_watchdog.global.enabled)" = 0 ]
 [ "$(uci get modem_watchdog.modem2.action)" = none ]
+# The affected release proved that merely restarting the worker could preserve
+# a historical actions-disabled state. v4 restores the requested Mega recovery
+# policy exactly once; subsequent user changes survive its version marker.
+recovery_v4=$(sed '/^\/etc\/init.d\/modem_watchdog /d; /^exit 0$/d' "$MEGA_TEST_REPO/firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v4")
+eval "$recovery_v4"
+[ "$(uci get modem_watchdog.global.recovery_v4)" = 1 ]
+[ "$(uci get modem_watchdog.global.enabled)" = 1 ]
+[ "$(uci get modem_watchdog.global.actions_enabled)" = 1 ]
+[ "$(uci get modem_watchdog.modem1.enabled)" = 1 ]
+[ "$(uci get modem_watchdog.modem2.enabled)" = 1 ]
+[ "$(uci get modem_watchdog.modem1.action)" = power_cycle ]
+[ "$(uci get modem_watchdog.modem2.action)" = power_cycle ]
+[ "$(uci get modem_watchdog.modem1.redial_attempts)" = 1 ]
+[ "$(uci get modem_watchdog.modem2.redial_attempts)" = 1 ]
+uci set modem_watchdog.global.enabled=0
+uci set modem_watchdog.modem2.action=none
+uci commit modem_watchdog
+( eval "$recovery_v4" )
+[ "$(uci get modem_watchdog.global.enabled)" = 0 ]
+[ "$(uci get modem_watchdog.modem2.action)" = none ]
 [ "$(uci get mwan3.default_rule6.use_policy)" = failover6 ]
 [ "$(uci get mwan3.4_1v6.family)" = ipv6 ]
-echo 'PASS: actual ARM64 UCI enables guarded recovery once, preserves later opt-out across presets/upgrades, and builds separate IPv6 policy'
+echo 'PASS: actual ARM64 UCI repairs the affected disabled watchdog once, then preserves later opt-out and the separate IPv6 policy'

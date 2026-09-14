@@ -102,6 +102,12 @@ test('Modem 2 GPIO recovery leaves Modem 1 alone and explicitly starts Modem 2',
   assert.match(f.calls,/service hang 2_1\nsleep 8 power=1\/0\nservice dial 2_1/);
   assert.doesNotMatch(f.calls,/service .*4_1/);
 });
+test('GPIO recovery registers the persistent dial worker before USB/netdev re-enumeration',()=>{
+  const f=fixture('echo 0 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; zbt_netdev() { return 1; }; cycle; cycle; cycle');
+  assert.match(f.calls,/service hang 4_1\nsleep 8 power=0\/1\nservice dial 4_1/);
+  assert.doesNotMatch(f.calls,/sleep 1 power=/, 'recovery must not time out polling for a netdev before dispatching dial');
+  assert.doesNotMatch(f.calls,/service .*2_1/);
+});
 test('only an interrupted owned GPIO pulse is restored; manual power-off is preserved',()=>{
   const f=fixture(`echo 0 > "$DB/sys/class/gpio/5g1/value"
 zbt_recovery_resume 4_1; cat "$DB/sys/class/gpio/5g1/value"
@@ -131,6 +137,7 @@ test('disabled modem and disabled recovery are read-only; missing GPIO never han
 test('bounded redial-first option escalates to GPIO; growing RX errors bypass soft retry',()=>{
   const f=fixture('echo 1 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; cycle; cycle; cycle; echo 700 > "$DB/clock"; cycle; cycle; cycle');
   assert.match(f.calls,/requesting redial[\s\S]*requesting power_cycle/);
+  assert.match(f.calls,/slot=4_1 action=redial result=dispatched[\s\S]*slot=4_1 action=power_cycle result=dispatched/);
   const bad=fixture('echo 2 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; cycle; cycle; echo 300 > "$DB/sys/class/net/wwan8/statistics/rx_errors"; cycle');
   assert.match(bad.calls,/rx_errors_growing; requesting power_cycle/);
   assert.doesNotMatch(bad.calls,/requesting redial/);

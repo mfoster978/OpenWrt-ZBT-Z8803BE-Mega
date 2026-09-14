@@ -3,15 +3,22 @@ START=99
 STOP=10
 USE_PROCD=1
 PROG=/usr/sbin/modem-watchdog
-start_service() {
-	# Always collect read-only health for LEDs; UCI flags gate recovery only.
-	procd_open_instance
-	procd_set_param command "$PROG"
+add_worker() {
+	local section="$1"
+	procd_open_instance "$section"
+	procd_set_param command "$PROG" "$section"
 	procd_set_param respawn 10 5 0
 	procd_set_param stdout 1
 	procd_set_param stderr 1
 	procd_set_param term_timeout 20
 	procd_close_instance
+}
+start_service() {
+	# Keep each modem's probe/recovery clock independent. The coordinator may
+	# spend time reconciling mwan3/conntrack without delaying either watchdog.
+	add_worker 4_1
+	add_worker 2_1
+	add_worker coordinator
 }
 service_triggers() {
 	procd_add_reload_trigger modem_watchdog

@@ -1,35 +1,65 @@
 #!/bin/sh
-# Health collection remains active for LEDs when recovery is switched off.
+# One independent health/recovery clock per physical slot. A separate
+# coordinator owns LEDs/MWAN maintenance and can never stall modem recovery.
 . /usr/lib/zbt/modem-recovery.sh
-. /usr/lib/zbt/mwan-runtime.sh
 umask 077
 mkdir -p "$ZBT_RECOVERY_DIR"
-exec 7>"$ZBT_RECOVERY_DIR/worker.lock"
-flock -n 7 || exit 0
-trap 'exit 0' INT TERM
-logger -t modem-watchdog "action=worker result=started recovery=$(zbt_recovery_get global.enabled) actions=$(zbt_recovery_get global.actions_enabled)"
-while :; do
-	interval=$(zbt_recovery_uint "$(zbt_recovery_get global.interval_seconds)" 20 10 60)
-	for section in 4_1 2_1; do
+
+watch_slot() {
+	local section="$1" key=modem1 interval gate previous_gate=''
+	[ "$section" != 2_1 ] || key=modem2
+	exec 7>"$ZBT_RECOVERY_DIR/$section.worker.lock"
+	flock -n 7 || exit 0
+	# Also inherit the legacy per-check exclusion so a recovery child from the
+	# replaced single-worker generation must finish before this worker starts.
+	exec 8>"$ZBT_RECOVERY_DIR/$section.check.lock"
+	flock -n 8 || exit 0
+	trap 'exit 0' INT TERM
+	logger -t modem-watchdog "slot=$section action=worker result=started"
+	while :; do
+		# Log every gate transition. A service that is alive but forbidden to
+		# recover must never again look like a functioning watchdog.
+		zbt_slot "$section" || exit 2
+		gate="main_dial=$(uci -q get qmodem.main.enable_dial 2>/dev/null || echo missing) slot_dial=$(uci -q get qmodem.$section.enable_dial 2>/dev/null || echo missing) slot_state=$(uci -q get qmodem.$section.state 2>/dev/null || echo missing) power=$(cat "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value" 2>/dev/null || echo missing) recovery=$(zbt_recovery_get global.enabled) actions=$(zbt_recovery_get global.actions_enabled) slot_recovery=$(zbt_recovery_get $key.enabled) configured_action=$(zbt_recovery_get $key.action)"
+		if [ "$gate" != "$previous_gate" ]; then
+			logger -t modem-watchdog "slot=$section action=recovery-gate $gate"
+			previous_gate=$gate
+		fi
 		zbt_recovery_resume "$section"
 		zbt_health_probe "$section" || true
 		zbt_health_save "$section"
-		# USB recovery waits must not stall health/LED checks on the peer.
-		(
-			exec 7>&-
-			exec 8>"$ZBT_RECOVERY_DIR/$section.check.lock"
-			flock -n 8 || exit 0
-			key=modem1; [ "$section" != 2_1 ] || key=modem2
-			zbt_recovery_check "$section" "$key"
-		) &
+		# Synchronous per-slot state means an action cannot be lost when the
+		# coordinator or the other modem is busy. The global action lock still
+		# serializes destructive GPIO operations.
+		zbt_recovery_check "$section" "$key"
+		interval=$(zbt_recovery_uint "$(zbt_recovery_get global.interval_seconds)" 20 10 60)
+		sleep "$interval"
 	done
-	/usr/sbin/zbt-modem-led-poller once >/dev/null 2>&1
-	# Direct modem tests can pass while the installed failover policy rejects
-	# all clients. Let MWAN3 reconcile its own runtime state before session cleanup.
-	/usr/sbin/zbt-mwan-apply
-	# A connected hotplug can precede the tracker's first TIME publication.
-	# Retry verified failback after that race, for Ethernet and Wi-Fi alike.
-	/usr/sbin/zbt-mwan-failback "$(zbt_mwan_winner)"
-	/usr/sbin/zbt-mwan-failback "$(zbt_mwan_winner 6)"
-	sleep "$interval"
-done
+}
+
+coordinate() {
+	local interval winner
+	. /usr/lib/zbt/mwan-runtime.sh
+	exec 7>"$ZBT_RECOVERY_DIR/coordinator.worker.lock"
+	flock -n 7 || exit 0
+	trap 'exit 0' INT TERM
+	logger -t modem-watchdog 'action=coordinator result=started'
+	while :; do
+		/usr/sbin/zbt-modem-led-poller once >/dev/null 2>&1
+		# Direct modem tests can pass while the installed failover policy rejects
+		# clients. This path never owns or delays a slot recovery worker.
+		/usr/sbin/zbt-mwan-apply
+		winner=$(zbt_mwan_winner 2>/dev/null || true)
+		/usr/sbin/zbt-mwan-failback "$winner"
+		winner=$(zbt_mwan_winner 6 2>/dev/null || true)
+		/usr/sbin/zbt-mwan-failback "$winner"
+		interval=$(zbt_recovery_uint "$(zbt_recovery_get global.interval_seconds)" 20 10 60)
+		sleep "$interval"
+	done
+}
+
+case "$1" in
+	4_1|2_1) watch_slot "$1" ;;
+	coordinator) coordinate ;;
+	*) logger -t modem-watchdog "action=worker result=rejected argument=${1:-missing}"; exit 2 ;;
+esac

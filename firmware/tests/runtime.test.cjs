@@ -752,6 +752,27 @@ test('routing presets keep one explicit whole-router priority order', () => {
   assert.doesNotMatch(watchdogUi, /applyPreset\('fastest'\)|Prefer the fastest cellular modem/);
 });
 
+test('watchdog has independent slot workers and a non-blocking MWAN coordinator', () => {
+  const init = file('firmware/feeds/luci-app-modem-watchdog/root/etc/init.d/modem_watchdog');
+  const worker = file('firmware/feeds/luci-app-modem-watchdog/root/usr/sbin/modem-watchdog');
+  const recovery = file('firmware/files/usr/lib/zbt/modem-recovery.sh');
+  const migration = file('firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v4');
+  assert.match(init, /add_worker 4_1[\s\S]*add_worker 2_1[\s\S]*add_worker coordinator/);
+  assert.match(init, /procd_set_param command "\$PROG" "\$section"/);
+  assert.match(worker, /watch_slot\(\)[\s\S]*zbt_health_probe "\$section"[\s\S]*zbt_recovery_check "\$section" "\$key"/);
+  assert.match(worker, /\$section\.check\.lock/);
+  assert.match(worker, /coordinate\(\)[\s\S]*zbt-mwan-apply/);
+  assert.match(worker, /action=recovery-gate/);
+  assert.doesNotMatch(worker.slice(worker.indexOf('watch_slot()'), worker.indexOf('coordinate()')), /zbt-mwan-apply|zbt-mwan-failback/);
+  assert.match(recovery, /Register the selected slot immediately[\s\S]*qmodem_network dial "\$section"/);
+  assert.doesNotMatch(recovery.slice(recovery.indexOf('zbt_recovery_action()'), recovery.indexOf('zbt_recovery_resume()')), /newindex|\[ "\$tries" -lt 60 \]/);
+  assert.match(migration, /modem_watchdog\.global\.enabled=1/);
+  assert.match(migration, /modem_watchdog\.global\.actions_enabled=1/);
+  assert.match(migration, /for pair in modem1:4_1 modem2:2_1/);
+  assert.match(migration, /modem_watchdog\.\$key\.enabled=1/);
+  assert.match(migration, /modem_watchdog\.\$key\.action=power_cycle/);
+});
+
 test('Mega phone tethering has a stable hotplug identity ahead of cellular modems', () => {
   const defaults = file('firmware/files/etc/uci-defaults/40-zbt-usb-tether-defaults');
   const hotplug = file('firmware/files/etc/hotplug.d/net/15-zbt-rndis-auto');

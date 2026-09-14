@@ -57,7 +57,7 @@ This is not a promise of universal zero-configuration access: carrier activation
 
 ## Speed-based failover
 
-The controls are under **Network → MultiWAN Manager → Priority & Recovery**. Modem 1 now remains above Modem 2 in every firmware-managed policy; the former speed-sampling promotion is retired. Watchdog recovery actions remain a separate opt-in.
+The controls are under **Network → MultiWAN Manager → Priority & Recovery**. Modem 1 now remains above Modem 2 in every firmware-managed policy; the former speed-sampling promotion is retired. Guarded watchdog recovery defaults on for both slots and retains separate permission controls for users who disable it later.
 
 The background sampler is a bounded, single-stream HTTPS transfer, not a complete Ookla benchmark. It binds the physical interface, which matters when both modem NATs return the same private address. Background tests use up to 25 MB each. Two modems sampled every 15 minutes can use approximately 4.8 GB/day. The old interactive sample has since been replaced by [live tests against Speedtest.net servers](live-speedtest.md), which have substantially higher data usage and separate user confirmation. The kernel timer/traffic LED cannot establish Internet reachability or distinguish SA/NSA by color.
 

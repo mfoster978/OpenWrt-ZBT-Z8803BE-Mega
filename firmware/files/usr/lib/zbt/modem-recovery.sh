@@ -17,7 +17,7 @@ zbt_recovery_allowed() {
 	[ "$(zbt_recovery_get "$key.enabled")" = 1 ]
 }
 zbt_recovery_action() (
-	local section="$1" action="$2" config_section="$1" path pid tries=0 powered_off=0 oldindex='' device newindex owner rest
+	local section="$1" action="$2" config_section="$1" path pid tries=0 powered_off=0 owner rest
 	zbt_recovery_allowed "$section" || exit 1
 	exec 6>"$ZBT_RECOVERY_DIR/action.lock"
 	flock -n 6 || exit 75
@@ -44,8 +44,6 @@ zbt_recovery_action() (
 	zbt_slot "$section" || exit 1
 	if [ "$action" = power_cycle ]; then
 		[ -w "${ZBT_SYSFS:-/sys}/class/gpio/$ZBT_POWER/value" ] || exit 1
-		device=$(zbt_netdev "$section")
-		oldindex=$(cat "${ZBT_SYSFS:-/sys}/class/net/$device/ifindex" 2>/dev/null)
 	fi
 	# Block new starts before stopping the old instance, including USB hotplug.
 	pid=$(ubus -t 5 call service list '{"name":"qmodem_network"}' | jq -r --arg n "modem_$section" '.qmodem_network.instances[$n].pid // empty')
@@ -71,22 +69,14 @@ zbt_recovery_action() (
 		rm -f "$ZBT_RECOVERY_DIR/$section.power-off"
 	fi
 	[ "$action" != disconnect ] || exit 0
-	tries=0
-	while [ "$tries" -lt 60 ]; do
-		zbt_recovery_allowed "$section" || exit 1
-		device=$(zbt_netdev "$section")
-		newindex=$(cat "${ZBT_SYSFS:-/sys}/class/net/$device/ifindex" 2>/dev/null)
-		if [ -n "$device" ] && { [ "$action" != power_cycle ] || [ "$newindex" != "$oldindex" ]; } &&
-			[ "$(uci -q get "qmodem.$section.state")" = enabled ]; then
-			# Release exclusion before explicit targeted start. The per-slot
-			# startup worker waits for the newly enumerated USB path, netdev and
-			# owned AT port without ever borrowing the peer modem.
-			rm -f "$path"
-			if /etc/init.d/qmodem_network dial "$section" >/dev/null 2>&1; then exit 0; fi
-			printf '%s\n' "$owner" > "$path"
-		fi
-		sleep 1; tries=$((tries + 1))
-	done
+	# Register the selected slot immediately after its old instance is gone and
+	# (for GPIO recovery) power is restored. qmodem-start.sh is deliberately a
+	# persistent hardware-readiness worker, so waiting here for a new netdev made
+	# recovery silently give up before the modem completed USB enumeration.
+	zbt_recovery_allowed "$section" || exit 1
+	rm -f "$path"
+	if /etc/init.d/qmodem_network dial "$section" >/dev/null 2>&1; then exit 0; fi
+	printf '%s\n' "$owner" > "$path"
 	exit 1
 )
 zbt_recovery_resume() (
@@ -164,7 +154,11 @@ zbt_recovery_check() {
 						last=$previous_last; fails=$previous_fails
 						attempts=$((attempts - 1)); cycles=$((cycles - 1))
 					else
-						[ "$result" = 0 ] || logger -t modem-watchdog "$section: recovery incomplete; retaining cooldown"
+						if [ "$result" = 0 ]; then
+							logger -t modem-watchdog "slot=$section action=$action result=dispatched hourly_attempt=$cycles"
+						else
+							logger -t modem-watchdog "slot=$section action=$action result=incomplete code=$result cooldown=retained"
+						fi
 						last=$(zbt_health_now)
 					fi
 				fi ;;

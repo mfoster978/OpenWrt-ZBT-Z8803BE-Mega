@@ -19,6 +19,7 @@ for script in \
   firmware/files/etc/uci-defaults/99-cellular-multiwan-defaults \
   firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v2 \
   firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v3 \
+  firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v4 \
   firmware/files/etc/hotplug.d/net/15-zbt-rndis-auto \
   firmware/files/etc/hotplug.d/usb/40-zbt-qmodem-autoenable \
   firmware/files/usr/lib/zbt/qmodem-start.sh \
@@ -33,9 +34,13 @@ done
 
 test -x firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v2
 test -x firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v3
+test -x firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v4
 test -x firmware/files/etc/uci-defaults/99-zbt-5g-adaptive-v2
 grep -Fq 'redial_attempts=1' firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v2
 grep -Fq '/etc/init.d/modem_watchdog restart' firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v3
+grep -Fq 'modem_watchdog.global.actions_enabled=1' firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v4
+grep -Fq 'for pair in modem1:4_1 modem2:2_1' firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v4
+grep -Fq 'modem_watchdog.$key.action=power_cycle' firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v4
 grep -Fq 'zbt_5g_adaptive_opt_in' firmware/files/etc/uci-defaults/99-zbt-5g-adaptive-v2
 grep -Fq 'action=dialer-exited' firmware/files/usr/lib/zbt/qmodem-start.sh
 grep -Fq 'zbt-qmodem-session-start.lock' firmware/files/usr/lib/zbt/qmodem-start.sh
@@ -205,6 +210,8 @@ grep -Fq 'zbt_5g_adaptive_opt_in=1' firmware/files/usr/lib/zbt/qmodem-5g.sh
 grep -Fq 'sleep 8' firmware/files/usr/lib/zbt/modem-recovery.sh
 grep -Fq '+flock' firmware/feeds/luci-app-modem-watchdog/Makefile
 grep -Fq 'action=worker result=started' firmware/feeds/luci-app-modem-watchdog/root/usr/sbin/modem-watchdog
+grep -Fq 'action=recovery-gate' firmware/feeds/luci-app-modem-watchdog/root/usr/sbin/modem-watchdog
+grep -Fq 'add_worker coordinator' firmware/feeds/luci-app-modem-watchdog/root/etc/init.d/modem_watchdog
 grep -Fq 'reason=kernel-data-path-lost' firmware/files/usr/lib/zbt/qmi-session.sh
 grep -Fq 'qmi_kernel_misses" -ge 3' firmware/files/usr/lib/zbt/qmi-session.sh
 test -x firmware/files/usr/sbin/zbt-qmodem-performance-policy

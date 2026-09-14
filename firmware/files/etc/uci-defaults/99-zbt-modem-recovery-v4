@@ -1,0 +1,35 @@
+#!/bin/sh
+# Correct affected kept configurations once. Earlier firmware could keep the
+# health/LED daemon running while recovery permission remained disabled, which
+# made an offline modem stay down without any redial or GPIO action. This
+# migration deliberately restores the requested Mega defaults once; user
+# changes made after recovery_v4 is recorded remain authoritative.
+[ "$(uci -q get modem_watchdog.global.recovery_v4 2>/dev/null)" = 1 ] && exit 0
+
+uci -q get modem_watchdog.global >/dev/null 2>&1 || uci set modem_watchdog.global=modem_watchdog
+uci set modem_watchdog.global.enabled=1
+uci set modem_watchdog.global.actions_enabled=1
+uci set modem_watchdog.global.interval_seconds=20
+uci set modem_watchdog.global.ping_fail_threshold=3
+uci set modem_watchdog.global.cooldown_seconds=180
+uci set modem_watchdog.global.redial_verify_seconds=60
+uci set modem_watchdog.global.boot_grace_seconds=60
+
+for pair in modem1:4_1 modem2:2_1; do
+	key=${pair%:*}
+	section=${pair#*:}
+	uci -q get "modem_watchdog.$key" >/dev/null 2>&1 || uci set "modem_watchdog.$key=modem"
+	uci set "modem_watchdog.$key.section=$section"
+	uci set "modem_watchdog.$key.enabled=1"
+	uci set "modem_watchdog.$key.action=power_cycle"
+	uci set "modem_watchdog.$key.redial_attempts=1"
+	# The hardened central workers are the only automatic recovery owner.
+	uci -q get "qmodem.$section" >/dev/null 2>&1 && uci set "qmodem.$section.monitor_enabled=0"
+done
+
+uci set modem_watchdog.global.recovery_v4=1
+uci commit modem_watchdog
+uci -q commit qmodem
+/etc/init.d/modem_watchdog enable
+/etc/init.d/modem_watchdog restart >/dev/null 2>&1 || true
+exit 0

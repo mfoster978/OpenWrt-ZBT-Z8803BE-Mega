@@ -23,7 +23,9 @@ working family prevents a whole-modem reset. IPv4 and IPv6 are reported separate
 If a network blocks ICMP, configure suitable reachable targets before relying on
 automatic recovery. Signal strength and an assigned IP do not prove Internet.
 
-Default recovery settings, applied once on a kept-config upgrade as requested:
+Default recovery settings are applied on fresh installs. A corrective v4
+migration also reapplies them once to affected kept configurations where the
+daemon was running but recovery permission had remained off:
 
 | Setting | Default |
 | --- | --- |
@@ -37,7 +39,7 @@ Default recovery settings, applied once on a kept-config upgrade as requested:
 | Soft-redial verification window | 60 seconds |
 | Minimum cooldown between attempts | 180 seconds after the attempt |
 | Maximum recovery requests | 3 per physical modem per hour |
-| Power-off pulse / enumeration wait | 8 seconds / up to 60 seconds |
+| Power-off pulse / restart dispatch | 8 seconds / immediate exact-slot worker registration |
 
 The watchdog reads RX-error growth and QMI child-loss markers. A confirmed QMI
 child loss receives the configured targeted redial first; growing RX errors
@@ -48,12 +50,20 @@ new grace period. Long outages can still be retried in later hourly windows.
 The cooldown is measured from a completed recovery request, so it cannot delay
 the first confirmed boot failure when no recovery action has occurred yet.
 
-Recovery stops and waits for only the selected procd instance, verifies fixed
-GPIO readback, waits for a newly enumerated interface, then explicitly starts
-that slot. USB hotplug cannot start a competing instance during the operation.
-The peer and WAN priority are untouched. Recovery shares the adaptive 5G radio
-lock and is excluded during a live mode trial. An interrupted owned power-off
-pulse is restored; an unmarked manual power-off is not reversed.
+Recovery stops and waits for only the selected procd instance and verifies fixed
+GPIO readback. It then immediately registers that slot's persistent startup
+worker; that worker waits for the newly enumerated USB path, netdev and owned AT
+port instead of the recovery action timing out before enumeration completes.
+USB hotplug cannot start a competing instance during the operation. The peer
+and WAN priority are untouched. Recovery shares the adaptive 5G radio lock and
+is excluded during a live mode trial. An interrupted owned power-off pulse is
+restored; an unmarked manual power-off is not reversed.
+
+Modem 1 and Modem 2 use independent procd health/recovery workers. LED and
+MultiWAN reconciliation run in a third coordinator, so a slow conntrack scan,
+MWAN repair or peer probe cannot stop one modem's failure counter. Every worker
+logs its recovery gate values on startup and whenever they change, making an
+actions-disabled state explicit in syslog.
 
 Each enabled QModem slot also has a persistent procd startup worker. It waits
 for that physical slot's exact USB path, single netdev and owned AT port before
@@ -71,8 +81,10 @@ immediately after a modem reconnects. Automatic preferred performs no background
 evaluation or periodic radio write.
 
 The separate QModem monitor remains disabled so it cannot race the central
-watchdog. Later user recovery opt-outs survive upgrades and routing presets.
-Bridge-passthrough modems are not probed/reset for lacking a router WAN address.
+watchdog. The corrective v4 migration restores central recovery once on an
+affected upgrade; user opt-outs made afterward survive later upgrades and
+routing presets. Bridge-passthrough modems are not probed/reset for lacking a
+router WAN address.
 
 ## QMI and netifd
 
