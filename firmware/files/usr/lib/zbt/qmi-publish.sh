@@ -1,5 +1,48 @@
 #!/bin/sh
 # Runtime only: no learned IP, gateway, device or DNS is written into UCI.
+
+zbt_qmi_route_cache_file() {
+	printf '%s/%s_dir/ipv4-main-route\n' "${MODEM_RUNDIR:-/var/run/qmodem}" "$1"
+}
+
+zbt_qmi_cache_ipv4_route() {
+	local modem_config="$1" modem_netcard="$2" qmi_ifindex="$3" route address gateway metric file tmp
+	[ -n "$qmi_ifindex" ] || return 1
+	address=$(ip -o -4 addr show dev "$modem_netcard" scope global 2>/dev/null |
+		awk '/ inet/ && !/ tentative| dadfailed/ {print $4; exit}')
+	[ -n "$address" ] || return 1
+	route=$(ip -4 route show table main default dev "$modem_netcard" 2>/dev/null | sed -n '1p')
+	[ -n "$route" ] || return 1
+	gateway=$(printf '%s\n' "$route" | awk '{for(i=1;i<=NF;i++) if($i=="via") {print $(i+1); exit}}')
+	metric=$(printf '%s\n' "$route" | awk '{for(i=1;i<=NF;i++) if($i=="metric") {print $(i+1); exit}}')
+	[ -n "$gateway" ] || return 1
+	case "$metric" in ''|*[!0-9]*) metric=$(uci -q get "network.$modem_config.metric") ;; esac
+	case "$metric" in ''|*[!0-9]*) metric=200; [ "$modem_config" != 2_1 ] || metric=210 ;; esac
+	file=$(zbt_qmi_route_cache_file "$modem_config")
+	mkdir -p "${file%/*}" || return 1
+	tmp="$file.$$"
+	printf '%s %s %s %s\n' "$qmi_ifindex" "$address" "$gateway" "$metric" > "$tmp" || { rm -f "$tmp"; return 1; }
+	mv -f "$tmp" "$file"
+}
+
+# Repair only a route that was observed on the same live CM session identity.
+# A cached route is rejected after USB re-enumeration, address change or device
+# change, so a stale carrier lease can never be installed on a new session.
+zbt_qmi_restore_ipv4_route() {
+	local modem_config="$1" modem_netcard="$2" qmi_ifindex="$3" file cached_index cached_address gateway metric current
+	[ -z "$(ip -4 route show table main default dev "$modem_netcard" 2>/dev/null)" ] || return 0
+	file=$(zbt_qmi_route_cache_file "$modem_config")
+	read -r cached_index cached_address gateway metric 2>/dev/null < "$file" || return 1
+	case "$cached_index:$metric" in *[!0-9:]*|:*|*:) return 1 ;; esac
+	[ "$cached_index" = "$qmi_ifindex" ] || return 1
+	current=$(ip -o -4 addr show dev "$modem_netcard" scope global 2>/dev/null |
+		awk '/ inet/ && !/ tentative| dadfailed/ {print $4; exit}')
+	[ -n "$current" ] && [ "$current" = "$cached_address" ] || return 1
+	ip -4 route replace default via "$gateway" dev "$modem_netcard" metric "$metric" || return 1
+	[ -n "$(ip -4 route show table main default dev "$modem_netcard" 2>/dev/null)" ] || return 1
+	logger -t zbt-mwan-reconcile "iface=$modem_config family=4 device=$modem_netcard action=restore_cm_main_route gateway=$gateway metric=$metric result=verified"
+}
+
 zbt_qmi_published() {
 	# A successful ubus call is not proof that netifd consumed the update.
 	# Check the same logical device and source-address data used by MWAN3.
@@ -10,7 +53,7 @@ zbt_qmi_published() {
 			map(.address) | . as $published | all($a[]; .ipaddr as $ip | $published | index($ip) != null))' >/dev/null
 }
 zbt_qmi_publish() {
-	local family="$1" interface="$2" addresses routes payload snapshot current
+	local family="$1" interface="$2" addresses routes payload snapshot current qmi_ifindex
 	case "$interface:$family" in "$modem_config:4"|"${modem_config}v6:6") ;; *) return 1 ;; esac
 	[ "$(uci -q get "network.$interface.modem_config")" = "$modem_config" ] || return 1
 	[ "$(uci -q get "network.$interface.proto")" = zbtqmi ] || return 1
@@ -19,6 +62,10 @@ zbt_qmi_publish() {
 	[ "$addresses" != '[]' ] || return 1
 	routes=$(ip -j -"$family" route show dev "$modem_netcard" table main 2>/dev/null | jq -ce --arg f "$family" '[.[] | select(.dst == "default") | {target:(if $f == "4" then "0.0.0.0" else "::" end), netmask:"0", metric:(.metric // 0)} + (if .gateway then {gateway:.gateway} else {} end)]') || return 1
 	[ "$routes" != '[]' ] || return 1
+	if [ "$family" = 4 ]; then
+		qmi_ifindex=$(cat "${ZBT_SYSFS:-/sys}/class/net/$modem_netcard/ifindex" 2>/dev/null)
+		zbt_qmi_cache_ipv4_route "$modem_config" "$modem_netcard" "$qmi_ifindex" || true
+	fi
 	payload=$(jq -cn --arg d "$modem_netcard" --arg f "$family" --argjson a "$addresses" --argjson r "$routes" '{action:0,ifname:$d,"link-up":true,"address-external":true} + (if $f=="4" then {"ipaddr":$a,routes:$r} else {"ip6addr":$a,routes6:$r} end)') || return 1
 	snapshot=$(printf '%s' "$payload" | sha256sum | cut -d' ' -f1)
 	eval "current=\${qmi_published$family:-}"
@@ -36,10 +83,10 @@ zbt_qmi_publish() {
 	return 0
 }
 
-# Prove that the address belongs to the currently supervised CM process before
-# repairing netifd. Internet reachability belongs to mwan3 and must not be a
-# prerequisite for starting mwan3's tracker.
-zbt_qmi_session_active() {
+# Prove that the address belongs to the currently supervised CM process. Route
+# ownership is checked separately so the reconciler can safely restore a route
+# that netifd removed after a successful CM setup.
+zbt_qmi_session_owned() {
 	local modem_config="$1" family="$2" modem_netcard="$3" qmi_ifindex="$4"
 	local pid arg previous='' seen_cm=0 seen_device=0 rundir
 	case "$modem_config:$family" in 4_1:4|4_1:6|2_1:4|2_1:6) ;; *) return 1 ;; esac
@@ -58,13 +105,17 @@ zbt_qmi_session_active() {
 		case "$arg" in quectel-CM|*/quectel-CM|quectel-CM-M|*/quectel-CM-M) seen_cm=1 ;; esac
 		[ "$previous" != -i ] || [ "$arg" != "$modem_netcard" ] || seen_device=1
 		previous=$arg
-	done <<EOF
+	done <<EOCMD
 $(tr '\000' '\n' < "/proc/$pid/cmdline")
-EOF
+EOCMD
 	[ "$seen_cm" = 1 ] && [ "$seen_device" = 1 ] || return 1
 	ip -o -"$family" addr show dev "$modem_netcard" scope global 2>/dev/null |
-		awk '/ inet/ && !/ tentative| dadfailed/ {found=1} END {exit !found}' || return 1
-	[ -n "$(ip -"$family" route show table main default dev "$modem_netcard" 2>/dev/null)" ]
+		awk '/ inet/ && !/ tentative| dadfailed/ {found=1} END {exit !found}'
+}
+
+zbt_qmi_session_active() {
+	zbt_qmi_session_owned "$@" || return 1
+	[ -n "$(ip -"$2" route show table main default dev "$3" 2>/dev/null)" ]
 }
 
 # Repair only the generated netifd identity for a proven, currently supervised
@@ -127,11 +178,19 @@ zbt_qmi_reconcile_publication() (
 	local modem_config="$1" family="$2" modem_netcard="$3" qmi_ifindex="$4" interface status proto attempt
 	interface=$modem_config
 	[ "$family" != 6 ] || interface=${modem_config}v6
+	zbt_qmi_session_owned "$modem_config" "$family" "$modem_netcard" "$qmi_ifindex" || return 1
+	if [ "$family" = 4 ]; then
+		zbt_qmi_restore_ipv4_route "$modem_config" "$modem_netcard" "$qmi_ifindex" || return 1
+	fi
 	zbt_qmi_session_active "$modem_config" "$family" "$modem_netcard" "$qmi_ifindex" || return 1
 	exec 1002>/var/lock/zbt-qmi-netifd.lock
 	flock -w 10 1002 || return 1
 	# Recheck ownership after waiting for the dialer's shared lock. Only that
 	# live session can authorize removal of a stale generated disabled flag.
+	zbt_qmi_session_owned "$modem_config" "$family" "$modem_netcard" "$qmi_ifindex" || return 1
+	if [ "$family" = 4 ]; then
+		zbt_qmi_restore_ipv4_route "$modem_config" "$modem_netcard" "$qmi_ifindex" || return 1
+	fi
 	zbt_qmi_session_active "$modem_config" "$family" "$modem_netcard" "$qmi_ifindex" || return 1
 	ZBT_QMI_CONFIG_REPAIRED=0
 	zbt_qmi_repair_netifd_config "$interface" "$family" "$modem_config" "$modem_netcard" || return 1
