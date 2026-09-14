@@ -45,7 +45,7 @@ uci() {
   case "$2" in
     qmodem.4_1.zbt_5g_adaptive_opt_in) echo "$OPT_IN" ;;
     qmodem.main.enable_dial|qmodem.4_1.enable_dial) echo 1 ;;
-    qmodem.4_1.state) echo enabled ;;
+    qmodem.4_1.state) echo disabled ;;
     qmodem.4_1.en_bridge) echo 0 ;;
   esac
 }

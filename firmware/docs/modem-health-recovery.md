@@ -74,6 +74,15 @@ after the initial service pass or the dialer later exits, the same worker retrie
 through its readiness gate rather than requiring a manual Dial click. It cannot
 borrow the peer modem's netdev or serial port.
 
+QModem's `state` field records discovery, while its global and per-slot
+`enable_dial` fields are the user's administrative switches. A fixed-slot USB
+remove/add or late-enumeration event can transiently leave discovery state as
+`disabled`. That marker no longer deletes the slot's persistent dial worker,
+blocks a watchdog redial, or prevents an already proven CM session from being
+published to netifd. The startup worker still requires the exact physical USB
+root, netdev and AT port before dialing; clearing `enable_dial` still stops the
+slot and is never overridden.
+
 Automatic adaptive SA/NSA evaluation is explicit opt-in and additionally
 requires six consecutive direct-health successes and no QMI-loss/recovery
 marker. It cannot test or write a radio mode during the unstable period

@@ -14,7 +14,11 @@ armed() {
 	case "$1" in 4_1|2_1) ;; *) return 1 ;; esac
 	[ "$(uci -q get qmodem.main.enable_dial)" = 1 ] || return 1
 	[ "$(uci -q get "qmodem.$1.enable_dial")" = 1 ] || return 1
-	[ "$(uci -q get "qmodem.$1.state")" = enabled ]
+	# state is QModem discovery state, not the operator's enable switch. A late
+	# USB scan/remove-add race must not delete this persistent readiness worker.
+	# It still cannot dial until qmodem-start verifies this slot's exact USB,
+	# netdev and AT port; enable_dial remains the administrative authority.
+	return 0
 }
 add_modem() {
 	# Register the enabled slot even when its USB netdev/AT port is late. The

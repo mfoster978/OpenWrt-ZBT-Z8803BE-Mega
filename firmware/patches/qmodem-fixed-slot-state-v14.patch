@@ -1,0 +1,61 @@
+--- a/application/qmodem/files/etc/init.d/qmodem_init
++++ b/application/qmodem/files/etc/init.d/qmodem_init
+@@ -120,7 +120,13 @@ _try_slot()
+         procd_set_param command  "ash" "/usr/share/qmodem/modem_scan.sh" "add" "$slot" "$type"
+         procd_close_instance
+     else
+-        /usr/share/qmodem/modem_scan.sh disable "$slot"
++        # These are fixed Z8803BE slots and may enumerate after qmodem_init.
++        # enable_dial is the operator's administrative choice; do not turn a
++        # late physical device into a persistent disabled profile at boot.
++        case "$slot" in
++            4-1|2-1) logger -t modem_init "fixed modem slot $slot not enumerated yet; dial supervisor will wait" ;;
++            *) /usr/share/qmodem/modem_scan.sh disable "$slot" ;;
++        esac
+     fi
+ }
+ 
+--- a/application/qmodem/files/usr/share/qmodem/modem_dial.sh
++++ b/application/qmodem/files/usr/share/qmodem/modem_dial.sh
+@@ -470,6 +470,7 @@ update_config()
+ 
+ check_dial_prepare()
+ {
++    local state_fullfill=0
+     cpin=$(at "$at_port" "AT+CPIN?")
+     get_sim_status "$cpin"
+     [ "$manufacturer" = "neoway" ] && {
+@@ -509,7 +510,16 @@ check_dial_prepare()
+         netdev_fullfill=0
+     fi
+ 
+-    if [ "$enable_dial" = "1" ] && [ "$sim_fullfill" = "1" ] && [ "$state" != "disabled" ] ;then
++    # QModem's state is discovery state, not the user's enable switch. A
++    # remove/late-add race can leave either fixed Mega slot marked disabled
++    # after its exact netdev, AT port and SIM are already present. The outer
++    # per-slot supervisor verifies that hardware ownership; enable_dial remains
++    # the administrative authority for 4_1 and 2_1.
++    case "$modem_config" in
++        4_1|2_1) state_fullfill=1 ;;
++        *) [ "$state" != "disabled" ] && state_fullfill=1 ;;
++    esac
++    if [ "$enable_dial" = "1" ] && [ "$sim_fullfill" = "1" ] && [ "$state_fullfill" = "1" ] ;then
+         config_fullfill=1
+     fi
+     if [ "$config_fullfill" = "1" ] && [ "$sim_fullfill" = "1" ] && [ "$netdev_fullfill" = "1" ] ;then
+@@ -845,7 +855,6 @@ set_if()
+                 [ "$(uci -q get network.$logical.proto)" = zbtqmi ] || continue
+                 [ "$(uci -q get qmodem.main.enable_dial)" = 1 ] || continue
+                 [ "$(uci -q get qmodem.$owner.enable_dial)" = 1 ] || continue
+-                [ "$(uci -q get qmodem.$owner.state)" != disabled ] || continue
+                 [ "$(uci -q get qmodem.$owner.en_bridge)" != 1 ] || continue
+                 ubus -t 5 call network.interface up "{\"interface\":\"$logical\"}" >/dev/null 2>&1
+             done
+@@ -865,7 +874,6 @@ set_if()
+             [ "$(uci -q get network.$logical.modem_config)" = "$modem_config" ] || continue
+             [ "$(uci -q get qmodem.main.enable_dial)" = 1 ] || continue
+             [ "$(uci -q get qmodem.$modem_config.enable_dial)" = 1 ] || continue
+-            [ "$(uci -q get qmodem.$modem_config.state)" != disabled ] || continue
+             ubus -t 5 call network.interface up "{\"interface\":\"$logical\"}" >/dev/null 2>&1
+         done
+     fi

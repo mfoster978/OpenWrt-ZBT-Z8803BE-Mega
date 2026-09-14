@@ -44,6 +44,13 @@ grep -Fq 'modem_watchdog.$key.action=power_cycle' firmware/files/etc/uci-default
 grep -Fq 'zbt_5g_adaptive_opt_in' firmware/files/etc/uci-defaults/99-zbt-5g-adaptive-v2
 grep -Fq 'action=dialer-exited' firmware/files/usr/lib/zbt/qmodem-start.sh
 grep -Fq 'zbt-qmodem-session-start.lock' firmware/files/usr/lib/zbt/qmodem-start.sh
+if rg -n 'qmodem\.\$1\.state|qmodem\.\$modem_config\.state' \
+  firmware/files/etc/init.d/qmodem_network \
+  firmware/files/usr/lib/zbt/qmodem-start.sh \
+  firmware/files/usr/lib/zbt/qmi-publish.sh; then
+  echo 'Fixed-slot dial and live-CM recovery must not be gated by transient QModem discovery state' >&2
+  exit 1
+fi
 
 # Cover every new overlay/feed shell entry point, including rpcd backends
 # whose filenames do not end in .sh. Libraries are parsed but never run.
@@ -217,6 +224,8 @@ grep -Fq 'action=recovery-gate' firmware/feeds/luci-app-modem-watchdog/root/usr/
 grep -Fq 'add_worker coordinator' firmware/feeds/luci-app-modem-watchdog/root/etc/init.d/modem_watchdog
 grep -Fq 'reason=kernel-data-path-lost' firmware/files/usr/lib/zbt/qmi-session.sh
 grep -Fq 'qmi_kernel_misses" -ge 3' firmware/files/usr/lib/zbt/qmi-session.sh
+grep -Fq 'fixed modem slot $slot not enumerated yet' firmware/patches/qmodem-fixed-slot-state-v14.patch
+grep -Fq '4_1|2_1) state_fullfill=1' firmware/patches/qmodem-fixed-slot-state-v14.patch
 test -x firmware/files/usr/sbin/zbt-qmodem-performance-policy
 grep -Fq '. /usr/lib/zbt/qmodem-5g.sh' firmware/files/usr/sbin/zbt-qmodem-performance-policy
 test -x firmware/files/usr/libexec/rpcd/zbt.speedify
@@ -360,7 +369,7 @@ grep -Fq "app.search = 'wsPort=match&wsEndpoint=" \
 if grep -Eq "getRouterActivation|method: 'activation'|Sign in this router" firmware/files/usr/share/zbt/speedify-luci-wrapper.js; then
   echo 'Speedify must use its native sign-in UI' >&2; exit 1
 fi
-for patch_name in qmodem-at-transport-v6.patch qmodem-radio-rpc-v6.patch zbt-qmodem-rpc-firstboot.patch qmodem-session-lifecycle-v7.patch qmodem-adaptive-safety-v13.patch zbt-wifi-firstboot-v7.patch; do
+for patch_name in qmodem-at-transport-v6.patch qmodem-radio-rpc-v6.patch zbt-qmodem-rpc-firstboot.patch qmodem-session-lifecycle-v7.patch qmodem-adaptive-safety-v13.patch qmodem-fixed-slot-state-v14.patch zbt-wifi-firstboot-v7.patch; do
   test -s "firmware/patches/$patch_name"
   grep -Fq "$patch_name" firmware/docker/build-openwrt.sh
 done

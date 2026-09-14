@@ -11,7 +11,7 @@ zbt_qmodem_armed() {
 	case "$1" in 4_1|2_1) ;; *) return 1 ;; esac
 	[ "$(uci -q get qmodem.main.enable_dial 2>/dev/null)" = 1 ] || return 1
 	[ "$(uci -q get "qmodem.$1.enable_dial" 2>/dev/null)" = 1 ] || return 1
-	[ "$(uci -q get "qmodem.$1.state" 2>/dev/null)" = enabled ]
+	return 0
 }
 
 zbt_qmodem_recovery_busy() {

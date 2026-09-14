@@ -290,7 +290,7 @@ function qmodemStarter() {
     .replace(/\nzbt_qmodem_start "\$@"\s*$/, '\n');
 }
 
-test('enabled Modem 1 waits for late USB enumeration and then dials without user action', () => {
+test('enabled Modem 1 survives stale discovery-disabled state, waits for USB, and dials', () => {
   const f = usbFixture(), stopped = path.join(f.dir, 'stopped');
   fs.rmSync(path.join(f.sys, 'devices/4-1/4-1:1.4/net/wwan8'), { recursive: true });
   const out = shell(qmodemStarter() + `
@@ -298,7 +298,7 @@ uci() {
   case "$3" in
     qmodem.main.enable_dial) echo 1 ;;
     qmodem.4_1.enable_dial) [ ! -f "$STOPPED" ] && echo 1 || echo 0 ;;
-    qmodem.4_1.state) echo enabled ;;
+    qmodem.4_1.state) echo disabled ;;
     qmodem.4_1.path) echo "$ZBT_SYSFS/bus/usb/devices/4-1" ;;
     qmodem.4_1.at_port) echo /dev/ttyUSB6 ;;
   esac
@@ -337,7 +337,7 @@ zbt_qmodem_start 4_1`, { ...f.env, STOPPED: stopped, DB: f.dir });
   assert.equal(out, 'launch:4_1\nlaunch:4_1');
 });
 
-test('boot readiness worker rejects the peer AT port and exits if its slot is disabled', () => {
+test('boot readiness worker rejects the peer AT port and exits if enable_dial is cleared', () => {
   const f = usbFixture(), stopped = path.join(f.dir, 'disabled');
   const out = shell(qmodemStarter() + `
 uci() {

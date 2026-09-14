@@ -26,7 +26,6 @@ for section in 4_1 2_1; do
 	enabled=1
 	if [ "$(uci -q get qmodem.main.enable_dial 2>/dev/null || true)" = 0 ] ||
 		[ "$(uci -q get "qmodem.$section.enable_dial" 2>/dev/null || true)" = 0 ] ||
-		[ "$(uci -q get "qmodem.$section.state" 2>/dev/null || true)" = disabled ] ||
 		[ "$(uci -q get "qmodem.$section.en_bridge" 2>/dev/null || true)" = 1 ]; then
 		enabled=0
 	fi

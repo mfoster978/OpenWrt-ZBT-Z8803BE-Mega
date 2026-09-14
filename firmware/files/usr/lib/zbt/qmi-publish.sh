@@ -45,7 +45,6 @@ zbt_qmi_session_active() {
 	case "$modem_config:$family" in 4_1:4|4_1:6|2_1:4|2_1:6) ;; *) return 1 ;; esac
 	[ "$(uci -q get qmodem.main.enable_dial)" = 1 ] || return 1
 	[ "$(uci -q get "qmodem.$modem_config.enable_dial")" = 1 ] || return 1
-	[ "$(uci -q get "qmodem.$modem_config.state")" != disabled ] || return 1
 	[ "$(uci -q get "qmodem.$modem_config.en_bridge")" != 1 ] || return 1
 	[ "$(zbt_netdev "$modem_config")" = "$modem_netcard" ] || return 1
 	[ "$(cat "${ZBT_SYSFS:-/sys}/class/net/$modem_netcard/ifindex" 2>/dev/null)" = "$qmi_ifindex" ] || return 1
@@ -149,7 +148,6 @@ zbt_qmi_reconcile_publication() (
 	if ! printf '%s' "$status" | jq -e '.available == true and .autostart == true and (.up == true or .pending == true)' >/dev/null; then
 		[ "$(uci -q get qmodem.main.enable_dial)" = 1 ] || return 1
 		[ "$(uci -q get "qmodem.$modem_config.enable_dial")" = 1 ] || return 1
-		[ "$(uci -q get "qmodem.$modem_config.state")" != disabled ] || return 1
 		[ "$(uci -q get "qmodem.$modem_config.en_bridge")" != 1 ] || return 1
 		# A reload that just introduced a formerly disabled section can take a
 		# moment to register its ubus object. Bound the wait; periodic reconcile

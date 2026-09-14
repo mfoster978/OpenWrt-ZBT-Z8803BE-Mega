@@ -22,6 +22,9 @@ uci set qmodem.main.enable_dial=1
 for slot in 4_1 2_1; do
 	uci set "qmodem.$slot=modem-device"
 	uci set "qmodem.$slot.enable_dial=1"
+	# QModem's late/remove scan may transiently leave discovery state disabled.
+	# A live supervised CM session plus enable_dial must remain authoritative.
+	uci set "qmodem.$slot.state=disabled"
 done
 uci commit qmodem
 for interface in 4_1 4_1v6 2_1 2_1v6; do

@@ -10,7 +10,7 @@ const root = path.resolve(__dirname, '../..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'zbt-pinned-patches-'));
 const specs = [
   ['qmodem-firstboot', '0xFar5eer/openwrt25.12_ZBT_Z8803BE', 'edc738504fe8fae81eb15de967456204699b1830', 'zbt-qmodem-rpc-firstboot.patch', ''],
-  ['qmodem', 'FUjr/QModem', 'a8b8a63e5b0853c79d2ad3f1ebbb673a724872bf', ['qmodem-dual-runtime.patch', 'qmodem-cell-discovery.patch', 'qmodem-5g-deployment.patch', 'qmodem-performance-ui.patch', 'qmodem-mega-policy-ui.patch', 'qmodem-connectivity-v5.patch', 'qmodem-at-transport-v6.patch', 'qmodem-radio-rpc-v6.patch', 'qmodem-session-lifecycle-v7.patch', 'qmodem-adaptive-v8.patch', 'qmodem-health-v9.patch', 'qmodem-netifd-serialization-v10.patch', 'qmodem-netifd-arming-v11.patch', 'qmodem-netifd-disabled-v12.patch', 'qmodem-adaptive-safety-v13.patch'], ''],
+  ['qmodem', 'FUjr/QModem', 'a8b8a63e5b0853c79d2ad3f1ebbb673a724872bf', ['qmodem-dual-runtime.patch', 'qmodem-cell-discovery.patch', 'qmodem-5g-deployment.patch', 'qmodem-performance-ui.patch', 'qmodem-mega-policy-ui.patch', 'qmodem-connectivity-v5.patch', 'qmodem-at-transport-v6.patch', 'qmodem-radio-rpc-v6.patch', 'qmodem-session-lifecycle-v7.patch', 'qmodem-adaptive-v8.patch', 'qmodem-health-v9.patch', 'qmodem-netifd-serialization-v10.patch', 'qmodem-netifd-arming-v11.patch', 'qmodem-netifd-disabled-v12.patch', 'qmodem-adaptive-safety-v13.patch', 'qmodem-fixed-slot-state-v14.patch'], ''],
   ['wifi-firstboot', '0xFar5eer/openwrt25.12_ZBT_Z8803BE', 'edc738504fe8fae81eb15de967456204699b1830', 'zbt-wifi-firstboot-v7.patch', ''],
   ['packages', 'openwrt/packages', 'db3b315119519f9194dad8aa668aa40618df9b20', ['mwan3-speed-policy.patch', 'mwan3-mega-lifecycle.patch'], ''],
   ['mwan3-luci', 'openwrt/luci', 'a611522a2bfc24ca2625e8cd2fcc9404288532a6', 'luci-app-mwan3-route-metric.patch', ''],
@@ -131,6 +131,15 @@ function run(command, args, options = {}) {
     if (name === 'qmodem-firstboot') require('./qmodem-firstboot.cjs')(root, tree, run);
     if (name === 'wifi-firstboot') require('./wifi-firstboot.cjs')(root, tree, run);
     if (name === 'qmodem') {
+      const init = fs.readFileSync(path.join(tree, 'application/qmodem/files/etc/init.d/qmodem_init'), 'utf8');
+      const dial = fs.readFileSync(path.join(tree, 'application/qmodem/files/usr/share/qmodem/modem_dial.sh'), 'utf8');
+      assert.match(init, /4-1\|2-1\) logger -t modem_init "fixed modem slot \$slot not enumerated yet/,
+        'late fixed-slot enumeration must not persist discovery-disabled state');
+      assert.match(dial, /4_1\|2_1\) state_fullfill=1/,
+        'fixed-slot dial readiness must use enable_dial rather than transient discovery state');
+      assert.doesNotMatch(dial.slice(dial.indexOf('for logical in 4_1'), dial.indexOf('if [ "$firewall_reload_flag"')),
+        /qmodem\.\$[^\n]*\.state/,
+        'netifd re-arm must not reject a live fixed slot because discovery state is stale');
       const source = path.join(tree, 'application/tom_modem/src');
       const binary = path.join(tmp, 'tom_modem');
       run('gcc', ['-o', binary, ...['main.c', 'utils.c', 'operations.c', 'transport.c', 'ttydevice.c',
