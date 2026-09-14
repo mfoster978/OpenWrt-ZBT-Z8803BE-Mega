@@ -1,0 +1,12 @@
+--- a/luci/luci-app-qmodem-next/htdocs/luci-static/resources/view/qmodem/network_config.js
++++ b/luci/luci-app-qmodem-next/htdocs/luci-static/resources/view/qmodem/network_config.js
+@@ -1046,7 +1046,8 @@
+ 	handleSaveApply: function(ev, mode) {
++		// zbt-network-apply: config-change-trigger
+ 		return this.handleSave(ev).then(function() {
+-			return callInitAction('qmodem_network', 'reload');
++			return ui.changes.apply(mode == '0');
+ 		});
+ 	},
+ 
+ 	handleSave: function(ev) {

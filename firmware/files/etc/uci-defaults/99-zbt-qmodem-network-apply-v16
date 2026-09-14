@@ -8,9 +8,10 @@ set -eu
 file=/www/luci-static/resources/view/qmodem/network_config.js
 [ -f "$file" ] || exit 0
 
-if grep -Fq '// zbt-network-apply: config-change-trigger' "$file" &&
-   grep -Fq "return ui.changes.apply(mode == '0');" "$file" &&
-   ! grep -Fq "return callInitAction('qmodem_network', 'reload');" "$file"; then
+# The image build patches this view before minification; comments and spaces
+# may already be gone. Retain the readable-handler migration for old overlays.
+if grep -Eq "return[[:space:]]+ui\.changes\.apply\(mode[[:space:]]*==[[:space:]]*'0'\);" "$file" &&
+   ! grep -Eq "callInitAction\('qmodem_network',[[:space:]]*'reload'\)" "$file"; then
 	exit 0
 fi
 

@@ -22,6 +22,13 @@ const baseMethod = luciSource.match(/\t\thandleSaveApply\(ev, mode\) \{\n[\s\S]*
 const applyMethod = uiSource.match(/\t\tapply\(checked\) \{\n[\s\S]*?\n\t\t\},/);
 assert.ok(baseMethod, 'unable to isolate pinned base handleSaveApply');
 assert.ok(applyMethod, 'unable to isolate pinned changes.apply');
+const handler = /\thandleSaveApply: function\(ev, mode\) \{\n[\s\S]*?\n\t\},/;
+assert.match(pinnedView, handler);
+const originalView = pinnedView.replace(handler, `\thandleSaveApply: function(ev, mode) {
+\t\treturn this.handleSave(ev).then(function() {
+\t\t\treturn callInitAction('qmodem_network', 'reload');
+\t\t});
+\t},`);
 
 function fixture(contents = pinnedView) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mega-network-apply-'));
@@ -57,6 +64,22 @@ function patchedView() {
     new Function(source);
     return source;
   } finally { f.close(); }
+}
+
+function minifiedBuildView() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mega-network-jsmin-'));
+  try {
+    const binary = path.join(dir, 'jsmin');
+    const compile = spawnSync('cc', ['-O2', '-o', binary, path.join(luciTree, 'modules/luci-base/src/jsmin.c')],
+      { encoding: 'utf8', timeout: 30000 });
+    assert.equal(compile.status, 0, compile.stderr);
+    const minify = spawnSync(binary, [], { input: pinnedView, encoding: 'utf8', timeout: 5000 });
+    assert.equal(minify.status, 0, minify.stderr);
+    new Function(minify.stdout);
+    assert.doesNotMatch(minify.stdout, /zbt-network-apply: config-change-trigger/,
+      'the build minifier must strip the source comment marker, as on the real image');
+    return minify.stdout;
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
 
 function loadView(source, calls, apply) {
@@ -100,14 +123,14 @@ function actualApply({ affected = false } = {}) {
     cancel() { assert.ok(cancelApply, 'actual LuCI checked-apply prompt must be open'); cancelApply(); } };
 }
 
-test('network Save & Apply migration patches the pinned view and is idempotent when sourced as mode 0644', () => {
+test('build-patched pinned view is already safe and the mode-0644 migration is a no-op', () => {
   const f = fixture();
   try {
     const first = f.run();
     assert.equal(first.status, 0, first.stderr);
     const patched = f.source();
     new Function(patched);
-    assert.notEqual(patched, pinnedView);
+    assert.equal(patched, pinnedView, 'the fix must be installed before package minification');
     assert.match(patched, /ui\.changes\.apply\(mode == '0'\)/);
     assert.match(patched, /\/\/ zbt-network-apply: config-change-trigger/);
     const second = f.run();
@@ -117,8 +140,43 @@ test('network Save & Apply migration patches the pinned view and is idempotent w
   } finally { f.close(); }
 });
 
+test('network Save & Apply migration repairs an original unminified handler', () => {
+  const f = fixture(originalView);
+  try {
+    assert.equal(f.run().status, 0);
+    const patched = f.source();
+    new Function(patched);
+    assert.notEqual(patched, originalView);
+    assert.match(patched, /\/\/ zbt-network-apply: config-change-trigger/);
+    assert.doesNotMatch(patched, /return callInitAction\('qmodem_network', 'reload'\)/);
+    assert.equal(f.run().status, 0);
+    assert.equal(f.source(), patched);
+  } finally { f.close(); }
+});
+
+test('actual jsmin build output remains safe and the first-boot migration accepts it unchanged', async () => {
+  const minified = minifiedBuildView();
+  const f = fixture(minified);
+  try {
+    const result = f.run();
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(f.source(), minified);
+    assert.equal(f.run().status, 0);
+    assert.equal(f.source(), minified);
+    assert.deepEqual(f.files().sort(), ['log', 'migration', 'network_config.js']);
+    const calls = [];
+    const actual = actualApply();
+    const view = loadView(minified, calls, checked => {
+      calls.push(['apply', checked]);
+      return actual.apply(checked);
+    });
+    view.handleSave = () => Promise.resolve();
+    await view.handleSaveApply({}, '0');
+    assert.deepEqual(calls, [['apply', true]], 'the delivered minified view cannot reload while apply is pending');
+  } finally { f.close(); }
+});
+
 test('network Save & Apply migration replaces both previously shipped non-awaiting reload forms', () => {
-  const handler = /\thandleSaveApply: function\(ev, mode\) \{\n[\s\S]*?\n\t\},/;
   const previousHandlers = [
     `\thandleSaveApply: function(ev, mode) {
 \t\treturn this.handleSave(ev).then(function() {
@@ -156,9 +214,9 @@ test('network Save & Apply migration replaces both previously shipped non-awaiti
 test('network Save & Apply migration fails closed on zero, duplicate, or commented handler matches', () => {
   const needle = 'handleSaveApply: function(ev, mode)';
   for (const source of [
-    pinnedView.replace(needle, 'handleDifferentApply: function(ev, mode)'),
-    pinnedView + '\n' + needle + ' {\n},\n',
-    pinnedView.replace(needle, '// ' + needle)
+    originalView.replace(needle, 'handleDifferentApply: function(ev, mode)'),
+    originalView + '\n' + needle + ' {\n},\n',
+    originalView.replace(needle, '// ' + needle)
   ]) {
     const f = fixture(source);
     try {
