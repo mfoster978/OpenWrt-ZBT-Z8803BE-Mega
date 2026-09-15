@@ -1,0 +1,107 @@
+name: Driver Refresh Firmware Build
+
+on:
+  pull_request:
+    paths:
+      - 'firmware/docker/build-openwrt-driver-refresh.sh'
+      - 'firmware/kernel-patches/762-net-usb-qmi-wwan-rx-urb-size.patch'
+      - 'firmware/tests/driver-refresh.test.cjs'
+      - '.github/workflows/driver-refresh-build.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: driver-refresh-firmware-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    env:
+      OPENWRT_ROOT: /workspace/openwrt
+      OPENWRT_GIT_URL: https://github.com/0xFar5eer/openwrt25.12_ZBT_Z8803BE.git
+      OPENWRT_GIT_REF: v25.12.021
+      EXPECTED_OPENWRT_COMMIT: edc738504fe8fae81eb15de967456204699b1830
+      ALLOW_CLONE_OPENWRT: '1'
+      CUSTOM_FEED_DIR: /workspace/firmware/feeds
+      FILES_OVERLAY_DIR: /workspace/firmware/files
+      PROFILE_PACKAGES_FILE: /workspace/firmware/profiles/packages-default.txt
+      PROFILE_KCONFIG_FILE: /workspace/firmware/profiles/kconfig-fragment.conf
+      TARGET: mediatek/filogic
+      SUBTARGET: filogic
+      DEVICE: zbtlink_zbt-z8803be
+      FINAL_MAKE_JOBS: '2'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Allocate test firmware identity
+        run: echo "MEGA_RELEASE_VERSION=firmware-$(date -u +%Y%m%d%H%M).${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+
+      - name: Validate production recipe and driver refresh guards
+        run: |
+          bash firmware/scripts/check-build-inputs.sh
+          node --test firmware/tests/driver-refresh.test.cjs
+
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /usr/share/swift /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache /usr/local/share/boost
+          sudo apt-get clean
+          docker system prune --all --force
+          df -h /
+          available_kb="$(df --output=avail -k / | tail -n 1 | tr -d ' ')"
+          [ "$available_kb" -ge 41943040 ] || {
+            echo 'Less than 40 GiB is available for the OpenWrt build' >&2
+            exit 1
+          }
+
+      - name: Build remote builder image
+        run: docker build -f firmware/docker/Dockerfile.remote-builder -t owrt-remote-builder .
+
+      - name: Build refreshed driver test firmware
+        id: build
+        run: |
+          set -o pipefail
+          mkdir -p artifacts/driver-refresh
+          docker run --rm \
+            -e OPENWRT_ROOT -e OPENWRT_GIT_URL -e OPENWRT_GIT_REF \
+            -e EXPECTED_OPENWRT_COMMIT -e ALLOW_CLONE_OPENWRT \
+            -e CUSTOM_FEED_DIR -e FILES_OVERLAY_DIR \
+            -e PROFILE_PACKAGES_FILE -e PROFILE_KCONFIG_FILE \
+            -e TARGET -e SUBTARGET -e DEVICE -e FINAL_MAKE_JOBS \
+            -e MEGA_RELEASE_VERSION \
+            -v "${PWD}:/workspace" \
+            owrt-remote-builder \
+            bash /workspace/firmware/docker/build-openwrt-driver-refresh.sh \
+            | tee artifacts/driver-refresh/build.log
+
+      - name: Collect test firmware
+        if: success()
+        run: |
+          target=openwrt/bin/targets/mediatek/filogic
+          mkdir -p artifacts/driver-refresh/images
+          find "$target" -maxdepth 1 -type f \
+            \( -name '*zbt-z8803be*.bin' -o -name '*zbt-z8803be*.manifest' -o -name 'zbt-mega-build.json' \) \
+            -exec cp {} artifacts/driver-refresh/images/ \;
+          test -n "$(find artifacts/driver-refresh/images -type f -name '*sysupgrade*.bin' -print -quit)"
+          sha256sum artifacts/driver-refresh/images/* > artifacts/driver-refresh/SHA256SUMS
+          {
+            echo "recipe=$GITHUB_SHA"
+            echo 'base_kernel=6.12.74'
+            echo 'mt76=be5ce7910521492d4a2e4ce7ee3843680a46c047'
+            echo 'qmi_wwan_backport=55f854dd5bdd8e19b936a00ef1f8d776ac32c7b0'
+          } > artifacts/driver-refresh/DRIVER-STACK.txt
+
+      - name: Upload driver refresh build
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: driver-refresh-${{ github.run_number }}
+          path: artifacts/driver-refresh
+          if-no-files-found: warn
+          retention-days: 14
