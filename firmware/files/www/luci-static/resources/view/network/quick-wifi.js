@@ -153,6 +153,9 @@ function validateQuickWifi(ssid, password) {
 	return null;
 }
 
+// Keep the original core API recognizable to source validation and callers:
+// applyQuickWifi(targets, ssid, password). The optional fourth argument only
+// controls whether legacy 2.4 GHz follows the MLO credentials.
 function applyQuickWifi(targets, ssid, password, options) {
 	options = options || {};
 	var state = quickWifiMloState(targets);
