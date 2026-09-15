@@ -43,7 +43,7 @@ jobs:
           patch --dry-run --batch --fuzz=0 --forward -p1 -d "$tree" \
             < firmware/kernel-patches/762-net-usb-qmi-wwan-rx-urb-size.patch
 
-      - name: Verify refreshed mt76 already contains retired Mega backports
+      - name: Verify refreshed mt76 contains or supersedes retired Mega backports
         run: |
           set -euo pipefail
           tree="$RUNNER_TEMP/mt76-refresh"
@@ -56,5 +56,5 @@ jobs:
           grep -Fq 'MT_DRV_HW_PS_BUFFERING' "$tree/mt7996/mmio.c"
           grep -Fq 'MCU_UNI_EVENT_PS_SYNC' "$tree/mt7996/mcu.c"
           grep -Fq 'IEEE80211_QOS_CTL_EOSP' "$tree/tx.c"
-          grep -Fq 'ieee80211_is_disassoc' "$tree/tx.c"
-          grep -Fq 'wcid.tx_info &= ~MT_WCID_TX_INFO_SET' "$tree/mt7996/main.c"
+          grep -Fq '!(wcid->tx_info & MT_WCID_TX_INFO_SET)' "$tree/tx.c"
+          grep -Fq 'msta_link->wcid.tx_info &= ~MT_WCID_TX_INFO_SET' "$tree/mt7996/main.c"
