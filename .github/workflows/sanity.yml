@@ -24,6 +24,8 @@ jobs:
         run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
       - name: Verify pinned patches and behavioral regressions
         run: node firmware/tests/check-patches.cjs
+      - name: Verify Quick Wi-Fi MLO and legacy choices
+        run: node --test firmware/tests/quick-wifi-mlo-choice.test.cjs
       - name: Verify per-modem TTL on real IPv4 and IPv6 packets in an isolated network
         run: sudo env "PATH=$PATH" ZBT_TEST_NFT=1 unshare --net -- node --test firmware/tests/ttl.test.cjs
       - name: Verify failed QMI cleanup preserves peer modem and LAN in an isolated network

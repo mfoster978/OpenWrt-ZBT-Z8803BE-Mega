@@ -6,7 +6,9 @@ const path = require('node:path');
 
 function fixture() {
   const source = fs.readFileSync(path.join(__dirname, '../files/www/luci-static/resources/view/network/quick-wifi.js'), 'utf8');
+  assert.doesNotThrow(() => new Function(source), 'Quick Wi-Fi LuCI source must parse');
   const boundary = source.indexOf('\nreturn view.extend({');
+  assert.ok(boundary > 0, 'unable to isolate Quick Wi-Fi model functions');
   const devices = [
     { '.name': 'radioA', band: '2g' },
     { '.name': 'radioB', band: '5g' },
@@ -57,7 +59,6 @@ test('keeps legacy separate and disables exact 5/6 duplicates', async () => {
 
 test('can deliberately share legacy name/password without changing security', async () => {
   const {api,ifaces}=fixture();
-  // Avoid duplicate AP warning path by starting secondaries disabled.
   ifaces.find(x=>x['.name']==='default_radioB').disabled='1';
   ifaces.find(x=>x['.name']==='default_radioC').disabled='1';
   const targets=api.quickWifiTargets();
