@@ -1,0 +1,60 @@
+name: Driver Refresh Sanity
+
+on:
+  push:
+    branches: [driver-refresh-test]
+    paths:
+      - 'firmware/docker/build-openwrt-driver-refresh.sh'
+      - 'firmware/kernel-patches/762-net-usb-qmi-wwan-rx-urb-size.patch'
+      - 'firmware/tests/driver-refresh.test.cjs'
+      - '.github/workflows/driver-refresh-sanity.yml'
+  pull_request:
+    paths:
+      - 'firmware/docker/build-openwrt-driver-refresh.sh'
+      - 'firmware/kernel-patches/762-net-usb-qmi-wwan-rx-urb-size.patch'
+      - 'firmware/tests/driver-refresh.test.cjs'
+      - '.github/workflows/driver-refresh-sanity.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  driver-refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check wrapper and source guards
+        run: node --test firmware/tests/driver-refresh.test.cjs
+
+      - name: Verify QMI backport applies to Linux 6.12.74 exactly
+        run: |
+          set -euo pipefail
+          tree="$RUNNER_TEMP/linux-6.12.74"
+          mkdir -p "$tree/drivers/net/usb" "$tree/include/linux/usb"
+          base=https://raw.githubusercontent.com/gregkh/linux/v6.12.74
+          curl -fsSL --retry 3 "$base/drivers/net/usb/qmi_wwan.c" -o "$tree/drivers/net/usb/qmi_wwan.c"
+          curl -fsSL --retry 3 "$base/drivers/net/usb/usbnet.c" -o "$tree/drivers/net/usb/usbnet.c"
+          curl -fsSL --retry 3 "$base/include/linux/usb/usbnet.h" -o "$tree/include/linux/usb/usbnet.h"
+          patch --dry-run --batch --fuzz=0 --forward -p1 -d "$tree" \
+            < firmware/kernel-patches/762-net-usb-qmi-wwan-rx-urb-size.patch
+
+      - name: Verify refreshed mt76 already contains retired Mega backports
+        run: |
+          set -euo pipefail
+          tree="$RUNNER_TEMP/mt76-refresh"
+          mkdir -p "$tree/mt7996"
+          base=https://raw.githubusercontent.com/openwrt/mt76/be5ce7910521492d4a2e4ce7ee3843680a46c047
+          for file in mt76.h tx.c mt7996/mmio.c mt7996/mcu.c mt7996/main.c; do
+            curl -fsSL --retry 3 "$base/$file" -o "$tree/$file"
+          done
+          grep -Fq 'MT_DRV_HW_PS_BUFFERING' "$tree/mt76.h"
+          grep -Fq 'MT_DRV_HW_PS_BUFFERING' "$tree/mt7996/mmio.c"
+          grep -Fq 'MCU_UNI_EVENT_PS_SYNC' "$tree/mt7996/mcu.c"
+          grep -Fq 'IEEE80211_QOS_CTL_EOSP' "$tree/tx.c"
+          grep -Fq 'ieee80211_is_disassoc' "$tree/tx.c"
+          grep -Fq 'wcid.tx_info &= ~MT_WCID_TX_INFO_SET' "$tree/mt7996/main.c"
