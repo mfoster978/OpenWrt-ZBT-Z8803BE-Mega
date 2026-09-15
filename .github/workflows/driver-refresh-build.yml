@@ -6,6 +6,7 @@ on:
       - 'firmware/docker/build-openwrt-driver-refresh.sh'
       - 'firmware/kernel-patches/762-net-usb-qmi-wwan-rx-urb-size.patch'
       - 'firmware/tests/driver-refresh.test.cjs'
+      - 'firmware/patches/driver-refresh-*.patch'
       - '.github/workflows/driver-refresh-build.yml'
   workflow_dispatch:
 

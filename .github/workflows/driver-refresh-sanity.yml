@@ -7,12 +7,14 @@ on:
       - 'firmware/docker/build-openwrt-driver-refresh.sh'
       - 'firmware/kernel-patches/762-net-usb-qmi-wwan-rx-urb-size.patch'
       - 'firmware/tests/driver-refresh.test.cjs'
+      - 'firmware/patches/driver-refresh-*.patch'
       - '.github/workflows/driver-refresh-sanity.yml'
   pull_request:
     paths:
       - 'firmware/docker/build-openwrt-driver-refresh.sh'
       - 'firmware/kernel-patches/762-net-usb-qmi-wwan-rx-urb-size.patch'
       - 'firmware/tests/driver-refresh.test.cjs'
+      - 'firmware/patches/driver-refresh-*.patch'
       - '.github/workflows/driver-refresh-sanity.yml'
 
 permissions:

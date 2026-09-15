@@ -85,6 +85,30 @@ if [[ -e "$qmi_target" ]] && ! cmp -s "$QMI_PATCH" "$qmi_target"; then
 fi
 cp "$QMI_PATCH" "$qmi_target"
 
+# September mt76 also requires these reviewed mac80211 APIs. Keep Linux
+# 6.12.74 and the pinned 6.18.7 wireless backports, adding the upstream
+# implementations rather than dropping MLO link IDs or the airtime callback.
+mac80211_makefile="${OPENWRT_ROOT}/package/kernel/mac80211/Makefile"
+grep -Fxq 'PKG_VERSION:=6.18.7' "$mac80211_makefile" &&
+  grep -Fxq 'PKG_HASH:=623e5cf46ca8e81fd413f4f465e2580a0143e24929f9c22ce1ba7c34f2872989' "$mac80211_makefile" || {
+  echo 'Driver-refresh API backports require the reviewed mac80211 6.18.7 archive' >&2
+  exit 3
+}
+for item in \
+  mac80211-airtime:package/kernel/mac80211/patches/subsys/990-zbt-driver-refresh-airtime.patch \
+  mac80211-fils-link:package/kernel/mac80211/patches/subsys/991-zbt-driver-refresh-fils-link.patch \
+  mac80211-probe-link:package/kernel/mac80211/patches/subsys/992-zbt-driver-refresh-probe-link.patch \
+  mt76-6.18-compat:package/kernel/mt76/patches/998-zbt-driver-refresh-6.18-compat.patch; do
+  compat_source="${RECIPE_ROOT}/firmware/patches/driver-refresh-${item%%:*}.patch"
+  compat_target="${OPENWRT_ROOT}/${item#*:}"
+  mkdir -p "$(dirname "$compat_target")"
+  if [[ -e "$compat_target" ]] && ! cmp -s "$compat_source" "$compat_target"; then
+    echo "Unexpected existing driver-refresh patch at $compat_target" >&2
+    exit 3
+  fi
+  cp "$compat_source" "$compat_target"
+done
+
 # The September mt76 snapshot already contains the PS/TIM, EOSP and stale
 # station queue fixes previously backported by Mega. Generate a temporary copy
 # of the normal build recipe which skips only those now-redundant mt76 patches.

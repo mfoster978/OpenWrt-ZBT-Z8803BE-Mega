@@ -1,0 +1,71 @@
+From: Mega Edition maintainers
+Subject: [PATCH] mt76: retain safe action parsing on mac80211 6.18
+
+The September mt76 snapshot uses the newer anonymous action union and
+function-like IEEE80211_MIN_ACTION_SIZE. The pinned mac80211 6.18.7 has
+the same wire format with a named union. Keep field-end bounds checks,
+including the entire two-byte ADDBA capability before dereferencing it.
+
+NAN data interfaces are not representable in the pinned nl80211 API.
+Omit only their unreachable common-connac switch cases; retain ordinary
+NAN, AP, station, mesh and IBSS handling. MT7996 is the image's Wi-Fi chip.
+No advertised MT7996 mode or MLO operation is removed.
+
+--- a/mt7996/mac.c
++++ b/mt7996/mac.c
+@@ -774,9 +774,10 @@ mt7996_mac_write_txwi_80211(struct mt7996_dev *dev, __le32 *txwi,
+ 	u32 val;
+ 
+ 	if (ieee80211_is_action(fc) &&
+-	    skb->len >= IEEE80211_MIN_ACTION_SIZE(action_code) &&
++	    skb->len >= offsetofend(struct ieee80211_mgmt,
++				    u.action.u.addba_req.action_code) &&
+ 	    mgmt->u.action.category == WLAN_CATEGORY_BACK &&
+-	    mgmt->u.action.action_code == WLAN_ACTION_ADDBA_REQ) {
++	    mgmt->u.action.u.addba_req.action_code == WLAN_ACTION_ADDBA_REQ) {
+ 		if (is_mt7990(&dev->mt76))
+ 			txwi[6] |= cpu_to_le32(FIELD_PREP(MT_TXD6_TID_ADDBA, tid));
+ 		else
+--- a/mt76_connac_mac.c
++++ b/mt76_connac_mac.c
+@@ -422,10 +422,11 @@ mt76_connac2_mac_write_txwi_80211(struct mt76_dev *dev, __le32 *txwi,
+ 	u32 val;
+ 
+ 	if (ieee80211_is_action(fc) &&
+-	    skb->len >= IEEE80211_MIN_ACTION_SIZE(addba_req.capab) &&
++	    skb->len >= offsetofend(struct ieee80211_mgmt,
++				    u.action.u.addba_req.capab) &&
+ 	    mgmt->u.action.category == WLAN_CATEGORY_BACK &&
+-	    mgmt->u.action.action_code == WLAN_ACTION_ADDBA_REQ) {
+-		u16 capab = le16_to_cpu(mgmt->u.action.addba_req.capab);
++	    mgmt->u.action.u.addba_req.action_code == WLAN_ACTION_ADDBA_REQ) {
++		u16 capab = le16_to_cpu(mgmt->u.action.u.addba_req.capab);
+ 
+ 		txwi[5] |= cpu_to_le32(MT_TXD5_ADD_BA);
+ 		tid = (capab >> 2) & IEEE80211_QOS_CTL_TID_MASK;
+--- a/mt76_connac_mcu.c
++++ b/mt76_connac_mcu.c
+@@ -466,7 +466,6 @@ void mt76_connac_mcu_sta_basic_tlv(struct mt76_dev *dev, struct sk_buff *skb,
+ 		basic->aid = cpu_to_le16(link_sta->sta->aid);
+ 		break;
+ 	case NL80211_IFTYPE_NAN:
+-	case NL80211_IFTYPE_NAN_DATA:
+ 		basic->conn_type = cpu_to_le32(CONNECTION_NAN);
+ 		break;
+ 	default:
+@@ -1265,7 +1264,6 @@ int mt76_connac_mcu_uni_add_dev(struct mt76_phy *phy,
+ 		basic_req.basic.conn_type = cpu_to_le32(CONNECTION_IBSS_ADHOC);
+ 		break;
+ 	case NL80211_IFTYPE_NAN:
+-	case NL80211_IFTYPE_NAN_DATA:
+ 		basic_req.basic.conn_type = cpu_to_le32(CONNECTION_NAN);
+ 		basic_req.basic.conn_state = !enable;
+ 		break;
+@@ -1680,7 +1678,6 @@ int mt76_connac_mcu_uni_add_bss(struct mt76_phy *phy,
+ 		basic_req.basic.conn_type = cpu_to_le32(CONNECTION_IBSS_ADHOC);
+ 		break;
+ 	case NL80211_IFTYPE_NAN:
+-	case NL80211_IFTYPE_NAN_DATA:
+ 		basic_req.basic.conn_type = cpu_to_le32(CONNECTION_NAN);
+ 		basic_req.basic.active = enable;
+ 		break;
