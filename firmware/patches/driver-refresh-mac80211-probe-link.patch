@@ -1,0 +1,104 @@
+From: Sriram R <quic_srirrama@quicinc.com>
+Subject: [PATCH] mac80211: backport per-link unsolicited probe response templates
+Upstream: e098c26b3524b6a8087dfc8f664d7cc76d30ecc2 (torvalds/linux)
+
+The mt76 call-site changes are already present in the pinned September
+snapshot. Keep the mac80211 implementation and in-tree ath call sites.
+This preserves the requested MLO link ID instead of using the default link.
+
+diff --git a/drivers/net/wireless/ath/ath11k/mac.c b/drivers/net/wireless/ath/ath11k/mac.c
+index dda77f87461eb9..ca08de6bbe85d0 100644
+--- a/drivers/net/wireless/ath/ath11k/mac.c
++++ b/drivers/net/wireless/ath/ath11k/mac.c
+@@ -3314,7 +3314,7 @@ static int ath11k_mac_fils_discovery(struct ath11k_vif *arvif,
+ 		interval = info->unsol_bcast_probe_resp_interval;
+ 
+ 		tmpl = ieee80211_get_unsol_bcast_probe_resp_tmpl(ar->hw,
+-								 arvif->vif);
++								 arvif->vif, 0);
+ 		if (tmpl)
+ 			ret = ath11k_wmi_probe_resp_tmpl(ar, arvif->vdev_id,
+ 							 tmpl);
+diff --git a/drivers/net/wireless/ath/ath12k/mac.c b/drivers/net/wireless/ath/ath12k/mac.c
+index af57ac10d51725..275263f77f44ba 100644
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -4320,7 +4320,8 @@ static int ath12k_mac_fils_discovery(struct ath12k_link_vif *arvif,
+ 		unsol_bcast_probe_resp_enabled = 1;
+ 		interval = info->unsol_bcast_probe_resp_interval;
+ 
+-		tmpl = ieee80211_get_unsol_bcast_probe_resp_tmpl(hw, vif);
++		tmpl = ieee80211_get_unsol_bcast_probe_resp_tmpl(hw, vif,
++								 info->link_id);
+ 		if (tmpl)
+ 			ret = ath12k_wmi_probe_resp_tmpl(ar, arvif->vdev_id,
+ 							 tmpl);
+diff --git a/include/net/mac80211.h b/include/net/mac80211.h
+index d36c14a86c8afe..89027e94ba5cee 100644
+--- a/include/net/mac80211.h
++++ b/include/net/mac80211.h
+@@ -7781,6 +7781,7 @@ struct sk_buff *ieee80211_get_fils_discovery_tmpl(struct ieee80211_hw *hw,
+  *	probe response template.
+  * @hw: pointer obtained from ieee80211_alloc_hw().
+  * @vif: &struct ieee80211_vif pointer from the add_interface callback.
++ * @link_id: valid link_id during MLO or 0 for non-MLO.
+  *
+  * The driver is responsible for freeing the returned skb.
+  *
+@@ -7788,7 +7789,8 @@ struct sk_buff *ieee80211_get_fils_discovery_tmpl(struct ieee80211_hw *hw,
+  */
+ struct sk_buff *
+ ieee80211_get_unsol_bcast_probe_resp_tmpl(struct ieee80211_hw *hw,
+-					  struct ieee80211_vif *vif);
++					  struct ieee80211_vif *vif,
++					  unsigned int link_id);
+ 
+ /**
+  * ieee80211_obss_color_collision_notify - notify userland about a BSS color
+diff --git a/net/mac80211/tx.c b/net/mac80211/tx.c
+index 77ad85a4992407..28dcdd7f0e05b6 100644
+--- a/net/mac80211/tx.c
++++ b/net/mac80211/tx.c
+@@ -5872,21 +5872,28 @@ EXPORT_SYMBOL(ieee80211_get_fils_discovery_tmpl);
+ 
+ struct sk_buff *
+ ieee80211_get_unsol_bcast_probe_resp_tmpl(struct ieee80211_hw *hw,
+-					  struct ieee80211_vif *vif)
++					  struct ieee80211_vif *vif,
++					  unsigned int link_id)
+ {
+ 	struct sk_buff *skb = NULL;
+ 	struct unsol_bcast_probe_resp_data *tmpl = NULL;
+ 	struct ieee80211_sub_if_data *sdata = vif_to_sdata(vif);
++	struct ieee80211_link_data *link;
+ 
+ 	if (sdata->vif.type != NL80211_IFTYPE_AP)
+ 		return NULL;
+ 
+-	rcu_read_lock();
+-	tmpl = rcu_dereference(sdata->deflink.u.ap.unsol_bcast_probe_resp);
+-	if (!tmpl) {
+-		rcu_read_unlock();
++	if (link_id >= IEEE80211_MLD_MAX_NUM_LINKS)
++		return NULL;
++
++	guard(rcu)();
++	link = rcu_dereference(sdata->link[link_id]);
++	if (!link)
++		return NULL;
++
++	tmpl = rcu_dereference(link->u.ap.unsol_bcast_probe_resp);
++	if (!tmpl)
+ 		return NULL;
+-	}
+ 
+ 	skb = dev_alloc_skb(sdata->local->hw.extra_tx_headroom + tmpl->len);
+ 	if (skb) {
+@@ -5894,7 +5901,6 @@ ieee80211_get_unsol_bcast_probe_resp_tmpl(struct ieee80211_hw *hw,
+ 		skb_put_data(skb, tmpl->data, tmpl->len);
+ 	}
+ 
+-	rcu_read_unlock();
+ 	return skb;
+ }
+ EXPORT_SYMBOL(ieee80211_get_unsol_bcast_probe_resp_tmpl);
