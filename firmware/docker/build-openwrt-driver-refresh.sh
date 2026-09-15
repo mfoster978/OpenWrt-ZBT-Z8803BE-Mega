@@ -90,10 +90,13 @@ cp "$QMI_PATCH" "$qmi_target"
 # of the normal build recipe which skips only those now-redundant mt76 patches.
 # Everything else, including the mac80211 AQL helper, hostapd fixes, overlays,
 # package selection and image validation, stays on the normal build path.
-generated_builder="${RECIPE_ROOT}/firmware/docker/.build-openwrt-driver-refresh.generated.sh"
+# Keep generated code outside the recipe checkout: the normal builder must
+# still enforce a clean source identity, including untracked source files.
+generated_builder="$(mktemp "${TMPDIR:-/tmp}/zbt-driver-refresh-builder.XXXXXX")"
 trap 'rm -f "$generated_builder"' EXIT
 python3 - "$BASE_BUILDER" "$generated_builder" <<'PY'
 from pathlib import Path
+import shlex
 import sys
 
 src = Path(sys.argv[1]).read_text()
@@ -105,6 +108,12 @@ if start < 0 or end < 0 or end <= start:
     raise SystemExit('normal build recipe mt76 backport block changed; refusing an unreviewed refresh')
 replacement = '''# Driver-refresh test: the 2026-09-01 mt76 pin already contains Mega's\n# former PS/TIM and legacy-client follow-up backports. Remove stale copies\n# from reusable trees and rely on the upstream implementation.\nrm -f package/kernel/mt76/patches/999-zbt-mt7996-ps-buffering.patch \\\n      package/kernel/mt76/patches/999-zbt-mt7996-ps-zlegacy-followup.patch\n'''
 out = src[:start] + replacement + src[end:]
+# The temporary script no longer lives under firmware/docker. Preserve the
+# actual checkout root without weakening the normal builder's identity check.
+root_marker = 'RECIPE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"'
+if out.count(root_marker) != 1:
+    raise SystemExit('normal build recipe root marker changed; refusing an unreviewed refresh')
+out = out.replace(root_marker, 'RECIPE_ROOT=' + shlex.quote(str(Path(sys.argv[1]).resolve().parents[2])))
 # Keep the normal post-build marker check but describe what it now verifies.
 out = out.replace(
     "Built MT7996 source does not contain the reviewed PS buffering backport",
@@ -116,4 +125,5 @@ chmod 0755 "$generated_builder"
 printf 'Driver refresh test: mt76=%s (%s), qmi_wwan NOMAXMTU backport enabled\n' \
   "$MT76_NEW_VERSION" "$MT76_NEW_DATE"
 
-exec bash "$generated_builder"
+# Do not exec: the parent must retain its EXIT trap on success and failure.
+bash "$generated_builder"
