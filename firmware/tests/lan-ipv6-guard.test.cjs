@@ -47,6 +47,10 @@ uci() {
         qmodem.2_1) echo modem-device ;;
         qmodem.4_1.lan_ipv6_policy) printf '%s\\n' "$POLICY4" ;;
         qmodem.2_1.lan_ipv6_policy) printf '%s\\n' "$POLICY2" ;;
+        qmodem.4_1.ra_master) printf '%s\\n' "$RA_MASTER4" ;;
+        qmodem.2_1.ra_master) printf '%s\\n' "$RA_MASTER2" ;;
+        qmodem.4_1.extend_prefix) printf '%s\\n' "$EXTEND4" ;;
+        qmodem.2_1.extend_prefix) printf '%s\\n' "$EXTEND2" ;;
         *) return 1 ;;
       esac ;;
     '-q set')
@@ -74,6 +78,10 @@ ${body}
       WINNER4: options.winner4 ?? '4_1',
       POLICY4: policy4,
       POLICY2: policy2,
+      RA_MASTER4: options.raMaster4 ? '1' : '',
+      RA_MASTER2: options.raMaster2 ? '1' : '',
+      EXTEND4: options.extend4 ? '1' : '',
+      EXTEND2: options.extend2 ? '1' : '',
       PD: options.pd ? '1' : '0',
       RESTART_FAIL: options.restartFail ? '1' : '0'
     }
@@ -106,6 +114,22 @@ test('auto suppresses stock LAN IPv6 only when the active cellular WAN has no de
   assert.match(f.calls, /dhcp\.lan\.ra=disabled/);
   assert.match(f.calls, /dhcp\.lan\.dhcpv6=disabled/);
   assert.equal((f.calls.match(/restart/g) || []).length, 1);
+});
+
+test('auto can adopt an already-disabled LAN and later restore when a prefix appears', () => {
+  const f = fixture({ winner6: '4_1v6', policy4: 'auto', pd: false, ra: 'disabled', dhcpv6: 'disabled' }, `
+zbt_lan_ipv6_once
+echo adopted=$(test -s "$ZBT_LAN_IPV6_STATE" && echo yes || echo no)
+PD=1
+zbt_lan_ipv6_once
+echo done
+`);
+  assert.equal(f.out, 'adopted=yes\ndone\n');
+  assert.equal(f.ra, 'server');
+  assert.equal(f.dhcpv6, 'server');
+  assert.equal(f.state, '');
+  assert.match(f.calls, /action=adopt pair=disabled:disabled result=ok/);
+  assert.equal((f.calls.match(/restart/g) || []).length, 1, 'adoption needs no restart; restore does');
 });
 
 test('auto leaves IPv6 server mode intact when a delegated prefix exists', () => {
@@ -152,13 +176,23 @@ test('non-cellular IPv6 winner causes Mega to back off', () => {
   assert.equal(f.calls, '');
 });
 
-test('relay, hybrid, mixed and owner-disabled LAN configurations are never overwritten', () => {
-  for (const [ra, dhcpv6] of [['relay', 'relay'], ['hybrid', 'hybrid'], ['disabled', 'disabled'], ['server', 'disabled']]) {
+test('relay, hybrid and mixed LAN configurations are never overwritten', () => {
+  for (const [ra, dhcpv6] of [['relay', 'relay'], ['hybrid', 'hybrid'], ['server', 'disabled']]) {
     const f = fixture({ winner6: '4_1v6', policy4: 'auto', pd: false, ra, dhcpv6 });
     assert.equal(f.ra, ra);
     assert.equal(f.dhcpv6, dhcpv6);
     assert.equal(f.state, '');
     assert.doesNotMatch(f.calls, /^uci /m, `${ra}:${dhcpv6}`);
+  }
+});
+
+test('QModem explicit relay or extended-prefix choices take precedence over Auto', () => {
+  for (const options of [{ raMaster4: true }, { extend4: true }]) {
+    const f = fixture({ winner6: '4_1v6', policy4: 'auto', pd: false, ...options });
+    assert.equal(f.ra, 'server');
+    assert.equal(f.dhcpv6, 'server');
+    assert.equal(f.state, '');
+    assert.equal(f.calls, '');
   }
 });
 
