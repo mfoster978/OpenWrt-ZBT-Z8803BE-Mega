@@ -18,7 +18,7 @@
 +			? true : _('Enter a whole number from 1280 to 1500. Recommended: 1500.');
 +	};
 +	// Other QModem devices keep their original configuration and behavior.
-+	o.render = function(section_id) {
++	o.render = function(option_index, section_id, in_table) {
 +		if (section_id !== '4_1' && section_id !== '2_1')
 +			return Promise.resolve(E('div'));
 +		return form.Value.prototype.render.apply(this, arguments);
