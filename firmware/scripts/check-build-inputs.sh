@@ -5,6 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${repo_root}"
 
 bash -n firmware/docker/build-openwrt.sh
+node --test firmware/tests/qmi-mtu.test.cjs
 python3 firmware/tests/mega-release.test.py
 for script in \
   firmware/files/etc/init.d/speedify-installer \
@@ -61,7 +62,10 @@ grep -Fq 'zbt_5g_adaptive_opt_in' firmware/files/etc/uci-defaults/99-zbt-5g-adap
 grep -Fq 'action=dialer-exited' firmware/files/usr/lib/zbt/qmodem-start.sh
 grep -Fq 'zbt-qmodem-session-start.lock' firmware/files/usr/lib/zbt/qmodem-start.sh
 grep -Fq 'zbt_qmi_normalize_mtu' firmware/files/usr/lib/zbt/qmi-session.sh
-grep -Fq 'ip link set dev "$modem_netcard" mtu 1500' firmware/files/usr/lib/zbt/qmi-session.sh
+grep -Fq 'zbt_qmi_target_mtu' firmware/files/usr/lib/zbt/qmi-session.sh
+test -s firmware/patches/qmodem-mtu-v17.patch
+grep -Fq 'qmodem-mtu-v17.patch' firmware/docker/build-openwrt.sh
+grep -Fq 'ip link set dev "$modem_netcard" mtu "$target_mtu"' firmware/files/usr/lib/zbt/qmi-session.sh
 grep -Fq '[ "$oldrx" -gt 0 ]' firmware/files/usr/lib/zbt/modem-recovery.sh
 if rg -n 'qmodem\.\$1\.state|qmodem\.\$modem_config\.state' \
   firmware/files/etc/init.d/qmodem_network \
