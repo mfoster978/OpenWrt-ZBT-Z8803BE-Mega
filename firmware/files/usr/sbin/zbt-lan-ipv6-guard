@@ -139,7 +139,9 @@ zbt_lan_ipv6_once() {
 	policy=$(uci -q get "qmodem.$modem.lan_ipv6_policy")
 	case "$policy" in
 		auto)
-			if zbt_lan_ipv6_has_pd "${modem}v6"; then
+			if [ "$(uci -q get "qmodem.$modem.ra_master")" = 1 ] || [ "$(uci -q get "qmodem.$modem.extend_prefix")" = 1 ]; then
+				zbt_lan_ipv6_release
+			elif zbt_lan_ipv6_has_pd "${modem}v6"; then
 				zbt_lan_ipv6_release
 			else
 				zbt_lan_ipv6_suppress

@@ -24,16 +24,21 @@ module.exports = function(root, patchedTree, patches, run) {
     const options = { cwd: tmp, env: { ...process.env, FILES_OVERLAY_DIR: path.join(root, 'firmware/files') } };
     const legacy = fs.readFileSync(path.join(root, 'firmware/patches/qmodem-mtu-legacy-v16.patch'), 'utf8');
     const view = path.join(tree, 'luci/luci-app-qmodem-next/htdocs/luci-static/resources/view/qmodem/network_config.js');
-    for (const variant of ['clean', 'original-v16', 'mtu-in-v16', 'versioned-v17']) {
+    for (const variant of ['clean', 'original-v16', 'mtu-in-v16', 'versioned-v17', 'versioned-v18']) {
       if (variant !== 'clean') {
-        for (const patch of variant === 'versioned-v17' ? patches : patches.slice(0, -1))
+        const applied = variant === 'versioned-v18' ? patches
+          : variant === 'versioned-v17' ? patches.slice(0, -1)
+          : patches.slice(0, -2);
+        for (const patch of applied)
           run('patch', ['--batch', '--fuzz=0', '--forward', '-p1', '-d', tree], { input: patch });
         if (variant === 'mtu-in-v16')
           run('patch', ['--batch', '--fuzz=0', '--forward', '-p1', '-d', tree], { input: legacy });
       }
-      if (variant === 'versioned-v17' || variant === 'mtu-in-v16') {
+      if (variant === 'versioned-v17' || variant === 'versioned-v18' || variant === 'mtu-in-v16') {
         const js = fs.readFileSync(view, 'utf8');
         assert.equal((js.match(/s\.option\(form\.Value, 'mtu'/g) || []).length, 1, 'exactly one MTU control');
+        if (variant === 'versioned-v18')
+          assert.equal((js.match(/s\.option\(form\.ListValue, 'lan_ipv6_policy'/g) || []).length, 1, 'exactly one LAN IPv6 policy control');
         new Function(js);
       }
       run('bash', ['-c', cleanup], options);

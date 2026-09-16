@@ -66,7 +66,7 @@ if ! git -C feeds/qmodem diff --quiet; then
   if patch --dry-run --force --fuzz=0 --reverse -p1 -d feeds/qmodem < "$legacy_mtu_patch" >/dev/null; then
     patch --force --fuzz=0 --reverse -p1 -d feeds/qmodem < "$legacy_mtu_patch"
   fi
-  for patch_name in qmodem-mtu-v17.patch qmodem-network-apply-v16.patch qmodem-fixed-slot-dial-v15.patch qmodem-fixed-slot-state-v14.patch qmodem-adaptive-safety-v13.patch qmodem-netifd-disabled-v12.patch qmodem-netifd-arming-v11.patch qmodem-netifd-serialization-v10.patch qmodem-health-v9.patch qmodem-adaptive-v8.patch qmodem-session-lifecycle-v7.patch qmodem-radio-rpc-v6.patch qmodem-at-transport-v6.patch qmodem-connectivity-v5.patch qmodem-mega-policy-ui.patch qmodem-performance-ui.patch qmodem-5g-deployment.patch qmodem-cell-discovery.patch qmodem-dual-runtime.patch; do
+  for patch_name in qmodem-lan-ipv6-v18.patch qmodem-mtu-v17.patch qmodem-network-apply-v16.patch qmodem-fixed-slot-dial-v15.patch qmodem-fixed-slot-state-v14.patch qmodem-adaptive-safety-v13.patch qmodem-netifd-disabled-v12.patch qmodem-netifd-arming-v11.patch qmodem-netifd-serialization-v10.patch qmodem-health-v9.patch qmodem-adaptive-v8.patch qmodem-session-lifecycle-v7.patch qmodem-radio-rpc-v6.patch qmodem-at-transport-v6.patch qmodem-connectivity-v5.patch qmodem-mega-policy-ui.patch qmodem-performance-ui.patch qmodem-5g-deployment.patch qmodem-cell-discovery.patch qmodem-dual-runtime.patch; do
     stack_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/$patch_name"
     # --force disables GNU patch's automatic reversal guessing. In batch
     # mode alone an absent patch can be applied while asking to reverse it.
@@ -195,6 +195,8 @@ patch --batch --fuzz=0 --forward -p1 -d feeds/qmodem < "$(dirname "${FILES_OVERL
 patch --batch --fuzz=0 --forward -p1 -d feeds/qmodem < "$(dirname "${FILES_OVERLAY_DIR}")/patches/qmodem-network-apply-v16.patch"
 # Per-slot MTU UI; a separate patch preserves old cached-build unwinding.
 patch --batch --fuzz=0 --forward -p1 -d feeds/qmodem < "$(dirname "${FILES_OVERLAY_DIR}")/patches/qmodem-mtu-v17.patch"
+# Per-modem LAN IPv6 policy UI. Runtime enforcement is an overlay service.
+patch --batch --fuzz=0 --forward -p1 -d feeds/qmodem < "$(dirname "${FILES_OVERLAY_DIR}")/patches/qmodem-lan-ipv6-v18.patch"
 for apn in broadband NXTGENPHONE ENHANCEDPHONE firstnet-broadband fast.t-mobile.com vzwinternet h2g2 h2g2-t usccinternet; do
   [ "$(grep -Fo "o.value('$apn'" feeds/qmodem/luci/luci-app-qmodem-next/htdocs/luci-static/resources/view/qmodem/network_config.js | wc -l)" -eq 2 ] || {
     echo "US APN preset is not present for both QModem SIM selectors: $apn" >&2; exit 3;

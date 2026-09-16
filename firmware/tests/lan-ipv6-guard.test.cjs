@@ -51,8 +51,8 @@ uci() {
       esac ;;
     '-q set')
       case "$3" in
-        dhcp.lan.ra=*) printf '%s' "${3#*=}" > "$DB/ra" ;;
-        dhcp.lan.dhcpv6=*) printf '%s' "${3#*=}" > "$DB/dhcpv6" ;;
+        dhcp.lan.ra=*) printf '%s' "\${3#*=}" > "$DB/ra" ;;
+        dhcp.lan.dhcpv6=*) printf '%s' "\${3#*=}" > "$DB/dhcpv6" ;;
         *) return 1 ;;
       esac
       printf 'uci %s\\n' "$3" >> "$DB/calls" ;;
