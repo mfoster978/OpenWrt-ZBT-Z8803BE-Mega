@@ -1,0 +1,35 @@
+--- a/luci/luci-app-qmodem-next/htdocs/luci-static/resources/view/qmodem/network_config.js
++++ b/luci/luci-app-qmodem-next/htdocs/luci-static/resources/view/qmodem/network_config.js
+@@ -319,6 +319,32 @@
+ 	o.modalonly = true;
+ 
+ 	// Advanced Settings
++	// Mega per-slot raw-IP QMI MTU. Opening this form does not write UCI.
++	o = s.option(form.Value, 'mtu', _('Cellular MTU'));
++	o.description = _('Default: 1500 bytes. Mega reapplies this host-interface MTU to the active raw-IP QMI connection on Modem 1 or Modem 2. Use 1280-1500 only; lowering it may bring back RX errors on affected modem/driver combinations. Bridge mode is not changed.');
++	o.default = '1500';
++	o.datatype = 'and(uinteger,range(1280,1500))';
++	o.rmempty = false;
++	o.modalonly = true;
++	o.depends('en_bridge', '0');
++	o.retain = true;
++	o.validate = function(section_id, value) {
++		return /^[1-9][0-9]{3}$/.test(value) && +value >= 1280 && +value <= 1500
++			? true : _('Enter a whole number from 1280 to 1500. Recommended: 1500.');
++	};
++	// Other QModem devices keep their original configuration and behavior.
++	o.render = function(section_id) {
++		if (section_id !== '4_1' && section_id !== '2_1')
++			return Promise.resolve(E('div'));
++		return form.Value.prototype.render.apply(this, arguments);
++	};
++	o.parse = function(section_id) {
++		if (section_id !== '4_1' && section_id !== '2_1')
++			return Promise.resolve();
++		return form.Value.prototype.parse.apply(this, arguments);
++	};
++	// End Mega per-slot MTU.
++
+ 	o = s.option(form.Flag, 'force_set_apn', _('Force Set APN'));
+ 	o.description = _('If enabled, the APN will be set even if it matches the current configuration.(only works with tom modified version of quectel-cm)');
+ 	o.default = '0';
