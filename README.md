@@ -8,7 +8,7 @@
   Developed and maintained by <a href="https://github.com/mfoster978">Michael Foster · @mfoster978</a>.<br>
   A full-featured OpenWrt community firmware for the ZBTLink ZBT-Z8803BE Wi-Fi 7 router,
   with independent dual-cellular-modem controls, multi-WAN failover, live speed testing,
-  integrated Speedify support, USB tethering and sharing, VPN tools, and guided firmware updates.
+  opt-in Speedify support, USB-only AdGuard Home, USB tethering and sharing, VPN tools, and guided firmware updates.
 </p>
 
 <p align="center">
@@ -58,7 +58,15 @@
 
 **Mega Edition is Michael Foster's firmware project.** Its development, edition-specific fixes and features, build configuration, releases, and ongoing maintenance are managed here by **@mfoster978**. Far5eer's working ZBT-Z8803BE firmware is the linked upstream foundation, not the maintainer of this edition.
 
-The board target, Linux version, Wi-Fi and modem-driver sources remain pinned to that foundation. Mega adds its own dual-modem behavior, user interface, routing tools, update workflow, reviewed Ethernet LED changes, and the upstream MT7988 external PCIe clock wiring. The underlying OpenWrt, Linux, QModem, and other packages retain their original authorship and licenses; see [Credits](#credits).
+The board target and Linux version remain pinned to that foundation. The production driver-refresh build uses the September 2026 mt76 source (`be5ce7910521492d4a2e4ce7ee3843680a46c047`) and the reviewed `qmi_wwan` RX URB/max-MTU backport, retaining Linux 6.12.74 and the existing MLO/hostapd fixes. Both RM551E-GL modems remain in QMI mode; this does not update modem firmware. Mega adds its own dual-modem behavior, user interface, routing tools, update workflow, reviewed Ethernet LED changes, and the upstream MT7988 external PCIe clock wiring. The underlying OpenWrt, Linux, QModem, and other packages retain their original authorship and licenses; see [Credits](#credits).
+
+### Latest additions and stability fixes
+
+- **USB-only AdGuard Home:** prepare a dedicated USB filesystem under **System → Application Storage**, then install and manage AdGuard through **Services → AdGuard Home**. It is optional and off by default; the full application and its data are downloaded to verified USB storage, not bundled onto internal flash.
+- **Modem connection-drop fixes:** the QMI supervisor now normalizes and verifies a sub-1500 raw-IP MTU on the owned modem interface, working with the refreshed RX-buffer driver fix. Recovery no longer mistakes the initial receive-error counter sample for new errors. Healthy sessions are preserved across transient routing/tracker changes; recovery stays scoped to the affected modem. These are fixes for identified software causes, not a guarantee against carrier or hardware outages.
+- **Speedify is opt-in:** enable it explicitly in LuCI when needed; disabling it stops its services and removes its forwarding rules.
+
+Build and regression-test results are distinct from physical-router testing. Consult each release's notes for the exact source and validation results.
 
 The [September live-router review](firmware/docs/warp-router-review-2026-09.md) documents the BusyBox/5G fix, QMI session cleanup, PCIe clock backport, guarded Wi-Fi initialization, and Speedify activation diagnostics. It separates source/test results from physical-router checks still needed after flashing.
 
@@ -91,6 +99,7 @@ Mega Edition combines a wide selection of add-on packages with custom-developed 
 | Modem 1 / Modem 2 routing | Modem 1 is always primary; Modem 2 is health-checked failover only. |
 | Live Speed Test Utility | Runs only when you start a test; it does not automatically consume cellular data in the background. |
 | Speedify | Off by default. Its LuCI **Enable Speedify** control starts the checksum-pinned installer and runtime; turning it off stops the tunnel stack and removes Speedify forwarding. Bonding still requires your own account and setup. |
+| AdGuard Home | Off and not downloaded by default. The full pinned ARM64 application installs only to verified USB application storage; removing that storage stops AdGuard and restores dnsmasq DNS. |
 | Tailscale and OpenVPN | Available for your own account/tunnel configuration; no user VPN connection is preconfigured. |
 | Android/iPhone USB tethering | Drivers and Apple pairing tools are ready; a supported phone binds to `usb_tether` after owner-side tethering/Trust setup. |
 | USB storage, extroot, SMB shares, and USB over IP | Storage, ext4 formatting, and external-overlay tools are ready. Mounts, the KSMBD server, and the USB/IP server are not activated until the owner configures/enables them. |
@@ -173,6 +182,8 @@ These capabilities are **Mega-only**. Nothing is silently shared. A supported at
 | Android USB tethering | Enable tethering on a data-capable cable; supported RNDIS/CDC Ethernet devices bind to `usb_tether`. | DHCP/MultiWAN is prepared automatically at route metric 100; confirm the device and carrier behavior before relying on it. |
 | iPhone/iPad tethering | Enable Personal Hotspot, accept Trust and pair when required; `ipheth` binds to `usb_tether`. | `usbmuxd` and `libimobiledevice` tools are present; Apple/carrier behavior still depends on the device and account. |
 | USB storage | Open **Services → USB Storage**, which links to OpenWrt's Mount Points page. | Mass-storage/UAS and ext4, exFAT, and FAT support are included. Media is neither auto-mounted into an unsafe guessed path nor automatically shared. |
+| USB application storage | Open **System → Application Storage**. | Adopt an unmounted ext4 partition without formatting, or explicitly erase a selected USB disk with typed confirmation. Verified UUID mount: `/mnt/mega-apps`. Erasing destroys the selected disk's data. |
+| AdGuard Home | Prepare application storage, then open **Services → AdGuard Home**. | Install the checksum-pinned official full ARM64 release to USB, create an administrator, and manage enable/disable/uninstall from LuCI. Binary, filters, configuration, query logs and statistics stay on USB. dnsmasq retains DHCP/local DNS support and is restored when AdGuard is disabled or storage disappears. |
 | Expand writable storage with extroot | Prepare a dedicated ext4 partition, copy the current writable overlay, and configure it by UUID using the documented SSH procedure. | `block-mount`, `e2fsprogs`, `parted`, USB/UAS, and ext4 support are built in. This can provide room for larger compatible applications such as AdGuard Home, but it does not add RAM/CPU or enlarge the physical NAND. |
 | SMB file sharing | Mount the filesystem first, then use **Services → Network Shares**. | KSMBD has an explicit **Enable server** switch that defaults off. Configure paths, users/guest policy, and trusted listening interfaces before enabling it. |
 | USB over IP | Configure `/etc/config/usbipd`, then use the `usbip`/`usbipd` command-line tools to bind, export, list, or attach devices. | The server defaults off. The pinned feeds have no USB/IP LuCI app, and the service must never be exposed directly to an untrusted WAN. |
@@ -460,7 +471,7 @@ docker run --rm -it \
   -e DEVICE=zbtlink_zbt-z8803be \
   -v "$PWD:/workspace" \
   z8803be-dual-modem-builder \
-  bash /workspace/firmware/docker/build-openwrt.sh
+  bash /workspace/firmware/docker/build-openwrt-driver-refresh.sh
 ```
 
 The same host should have roughly 40–50 GiB available for a clean build. More space is recommended when retaining source trees, download caches, or multiple build outputs.

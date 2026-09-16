@@ -1,19 +1,19 @@
 #!/bin/sh
 failures=0
-while sleep 3; do
+guard_pass() {
 	enabled="$(uci -q get zbt_adguard.main.enabled)"
 	installed="$(uci -q get zbt_adguard.main.installed)"
 	if [ "$enabled" != 1 ] || [ "$installed" != 1 ]; then
 		failures=0
 		/usr/sbin/zbt-adguard dns-restore >/dev/null 2>&1
-		continue
+		return 0
 	fi
 	if ! /usr/sbin/zbt-app-storage verify; then
 		logger -t zbt-adguard "verified USB application storage disappeared; restoring router DNS"
 		/etc/init.d/zbt-adguard stop
 		/usr/sbin/zbt-adguard dns-restore
 		failures=0
-		continue
+		return 0
 	fi
 	if pidof AdGuardHome >/dev/null 2>&1; then
 		failures=0
@@ -31,4 +31,13 @@ while sleep 3; do
 			failures=0
 		fi
 	fi
+}
+while sleep 3; do
+	# Setup temporarily owns DNS before enabled=1 is committed. Do not undo
+	# that transaction, or race an explicit disable/uninstall operation.
+	exec 9>/var/lock/zbt-adguard.lock
+	flock -n 9 || continue
+	guard_pass
+	flock -u 9
+	exec 9>&-
 done

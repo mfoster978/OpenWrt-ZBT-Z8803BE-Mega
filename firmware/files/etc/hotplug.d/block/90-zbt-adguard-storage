@@ -2,6 +2,10 @@
 [ "$ACTION" = remove ] || exit 0
 (
 	sleep 1
+	# Let a bounded in-flight lifecycle operation finish before rollback.
+	# The periodic guard retries if this wait times out.
+	exec 9>/var/lock/zbt-adguard.lock
+	flock -w 90 9 || exit 0
 	if [ "$(uci -q get zbt_adguard.main.enabled)" = 1 ] &&
 		! /usr/sbin/zbt-app-storage verify; then
 		logger -t zbt-adguard "block removal invalidated application storage; stopping AdGuard"

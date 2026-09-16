@@ -36,8 +36,14 @@ agh_valid_uci_section() {
 }
 
 agh_storage_ready() {
+	local entry
 	uuid="$(uci -q get "$MEGA_APPS_CONFIG.storage.uuid")"
-	[ -n "$uuid" ] && mega_mount_verified "$uuid"
+	[ -n "$uuid" ] && mega_mount_verified "$uuid" || return 1
+	# Adopted USB contents must not redirect app writes to internal flash.
+	for entry in "$MEGA_APPS_MOUNT" "$AGH_ROOT" "$AGH_CURRENT" "$AGH_BINARY" \
+		"$AGH_CONFIG_DIR" "$AGH_CONFIG" "$AGH_WORK" "$AGH_WORK/tmp" "$AGH_STAGING"; do
+		[ ! -L "$entry" ] || return 1
+	done
 }
 
 agh_installed() {

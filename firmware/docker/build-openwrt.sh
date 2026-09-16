@@ -789,6 +789,29 @@ grep -Fq "method: 'set_enabled'" \
 for overlay_file in usr/lib/zbt/mwan-reconcile.sh usr/sbin/zbt-mwan-apply usr/lib/zbt/5g-state.sh usr/lib/zbt/5g-adaptive.sh usr/lib/zbt/mwan-runtime.sh usr/sbin/zbt-mwan-failback usr/sbin/zbt-5g-adaptive etc/init.d/zbt-5g-adaptive etc/hotplug.d/iface/90-zbt-mwan-failback etc/uci-defaults/99-zbt-5g-adaptive-v1 etc/uci-defaults/99-zbt-5g-adaptive-v2 etc/uci-defaults/99-zbt-modem-recovery-v2 etc/uci-defaults/99-zbt-modem-recovery-v3 etc/uci-defaults/99-zbt-modem-recovery-v4 etc/uci-defaults/99-zbt-modem-recovery-v5 usr/lib/zbt/qmodem-5g.sh usr/lib/zbt/qmi-session.sh usr/lib/zbt/qmodem-start.sh usr/sbin/zbt-wifi-firstboot etc/init.d/zbt-wifi-firstboot etc/uci-defaults/71-zbt-wifi-firstboot usr/lib/zbt/mwan3-speed-metric.sh usr/libexec/rpcd/zbt.speedify usr/sbin/zbt-speedify-control usr/share/rpcd/acl.d/zbt-speedify.json usr/share/rpcd/acl.d/luci-app-speedify.json usr/share/zbt/speedify-luci-wrapper.js usr/lib/zbt/speedify-routing.sh usr/sbin/zbt-speedify-guard etc/init.d/zbt-speedify-guard etc/init.d/speedify-installer usr/sbin/speedify-installer-loop etc/uci-defaults/99-speedify-bootstrap www/luci-static/resources/view/speedify/speedify.js etc/uci-defaults/99-zbt-modem-route-v5 etc/uci-defaults/99-zbt-qmi-netifd-v11 etc/uci-defaults/99-zbt-qmi-netifd-v12 www/luci-static/resources/view/network/quick-wifi.js usr/share/luci/menu.d/zbt-quick-wifi.json usr/share/rpcd/acl.d/zbt-quick-wifi.json; do
   cmp "${FILES_OVERLAY_DIR}/${overlay_file}" "${rootfs_dir}/${overlay_file}" || exit 4
 done
+# Ship every USB application component from this exact recipe, including
+# executable lifecycle helpers. Do not publish a UI-only integration.
+for overlay_file in \
+  etc/config/zbt_apps etc/config/zbt_adguard \
+  usr/lib/zbt/app-storage.sh usr/lib/zbt/adguard.sh \
+  usr/share/luci/menu.d/zbt-applications.json \
+  usr/share/rpcd/acl.d/zbt-storage.json usr/share/rpcd/acl.d/zbt-adguard.json \
+  www/luci-static/resources/view/system/mega-storage.js \
+  www/luci-static/resources/view/system/mega-apps.css \
+  www/luci-static/resources/view/services/adguard-home.js; do
+  cmp "${FILES_OVERLAY_DIR}/${overlay_file}" "${rootfs_dir}/${overlay_file}" || exit 4
+done
+for overlay_file in \
+  usr/libexec/rpcd/zbt.storage usr/libexec/rpcd/zbt.adguard \
+  usr/sbin/zbt-app-storage usr/sbin/zbt-app-storage-worker \
+  usr/sbin/zbt-adguard usr/sbin/zbt-adguard-install usr/sbin/zbt-adguard-guard \
+  etc/init.d/zbt-adguard etc/init.d/zbt-adguard-guard \
+  etc/hotplug.d/block/90-zbt-adguard-storage etc/uci-defaults/90-zbt-adguard-usb; do
+  test -x "${rootfs_dir}/${overlay_file}" &&
+    cmp "${FILES_OVERLAY_DIR}/${overlay_file}" "${rootfs_dir}/${overlay_file}" || exit 4
+done
+grep -Fq 'Open application-storage setup' \
+  "${rootfs_dir}/www/luci-static/resources/view/system/mounts.js" || exit 4
 # Check the actual installed dialer and authoritative board defaults, not
 # only overlay helpers which would be inert without their pinned call sites.
 grep -Fq 'zbt_qmi_session "$@"' "${rootfs_dir}/usr/share/qmodem/modem_dial.sh" || exit 4

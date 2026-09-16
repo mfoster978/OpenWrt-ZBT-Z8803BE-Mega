@@ -18,6 +18,7 @@ const specs = [
   ['luci-first-login', 'openwrt/luci', 'a611522a2bfc24ca2625e8cd2fcc9404288532a6', 'luci-first-login-password.patch', ''],
   ['luci-resource-version', 'openwrt/luci', 'a611522a2bfc24ca2625e8cd2fcc9404288532a6', 'luci-mega-resource-version.patch', ''],
   ['luci-wireless', 'openwrt/luci', 'a611522a2bfc24ca2625e8cd2fcc9404288532a6', 'luci-wireless-mlo-toggle.patch', ''],
+  ['luci-mounts', 'openwrt/luci', 'a611522a2bfc24ca2625e8cd2fcc9404288532a6', 'luci-mounts-mega-app-storage.patch', ''],
   ['argon-mobile', 'immortalwrt/luci', '2a84422e7c999d038b36b9555ba5a3abc4adaa4b', 'luci-theme-argon-mega-mobile.patch', ''],
   ['ksmbd', 'openwrt/packages', 'db3b315119519f9194dad8aa668aa40618df9b20', 'ksmbd-server-disabled.patch', 'net/ksmbd-tools/'],
   ['ksmbd-luci', 'openwrt/luci', 'a611522a2bfc24ca2625e8cd2fcc9404288532a6', 'luci-app-ksmbd-enable-toggle.patch', 'applications/luci-app-ksmbd/'],

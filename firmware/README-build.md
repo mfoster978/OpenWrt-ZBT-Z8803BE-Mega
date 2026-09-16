@@ -7,7 +7,7 @@ Use the exact release notes, checksums and build provenance for your download. C
 ## What is included
 
 - Docker builder definition: `firmware/docker/Dockerfile.remote-builder`
-- Build entrypoint: `firmware/docker/build-openwrt.sh`
+- Production refreshed-driver entrypoint: `firmware/docker/build-openwrt-driver-refresh.sh` (wraps the normal builder and retains its validation).
 - Default package profile: `firmware/profiles/packages-default.txt`
 - Kernel config fragment with TUN support: `firmware/profiles/kconfig-fragment.conf`
 - First-boot baked defaults overlay: `firmware/files/etc/uci-defaults/99-cellular-multiwan-defaults`
@@ -43,7 +43,7 @@ docker run --rm -it \
   -e BACKUP_IMAGES_DIR=/workspace/artifacts/router-backups \
   -v "$PWD":/workspace \
   owrt-remote-builder \
-  bash /workspace/firmware/docker/build-openwrt.sh
+  bash /workspace/firmware/docker/build-openwrt-driver-refresh.sh
 ```
 ## Notes
 
