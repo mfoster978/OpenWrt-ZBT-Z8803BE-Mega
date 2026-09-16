@@ -19,6 +19,10 @@ test('storage backend only targets verified USB block devices and ext4', () => {
 	assert.match(src, /TOKEN_REALPATH/);
 	assert.match(src, /TOKEN_MAJOR_MINOR/);
 	assert.doesNotMatch(src, /\/dev\/sda1|\/dev\/sda[^a-z0-9]/);
+	assert.match(src, /MEGA_PARTED="\$\{MEGA_PARTED:-\/sbin\/parted\}"/);
+	assert.match(src, /MEGA_PARTPROBE="\$\{MEGA_PARTPROBE:-\/sbin\/partprobe\}"/);
+	const builder = read('firmware/docker/build-openwrt.sh');
+	assert.match(builder, /for app_tool in sbin\/block sbin\/parted sbin\/partprobe usr\/sbin\/mkfs.ext4/);
 });
 
 test('adguard backend pins official release and uses USB-only paths', () => {

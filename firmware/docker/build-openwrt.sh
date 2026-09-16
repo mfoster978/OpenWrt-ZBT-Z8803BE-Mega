@@ -791,6 +791,12 @@ for overlay_file in usr/lib/zbt/mwan-reconcile.sh usr/sbin/zbt-mwan-apply usr/li
 done
 # Ship every USB application component from this exact recipe, including
 # executable lifecycle helpers. Do not publish a UI-only integration.
+for app_tool in sbin/block sbin/parted sbin/partprobe usr/sbin/mkfs.ext4 usr/bin/util-linux-flock; do
+  test -x "${rootfs_dir}/${app_tool}" || {
+    echo "USB application runtime dependency is missing: ${app_tool}" >&2
+    exit 4
+  }
+done
 for overlay_file in \
   etc/config/zbt_apps etc/config/zbt_adguard \
   usr/lib/zbt/app-storage.sh usr/lib/zbt/adguard.sh \
