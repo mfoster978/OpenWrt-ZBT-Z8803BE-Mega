@@ -1,0 +1,66 @@
+From 55f854dd5bdd8e19b936a00ef1f8d776ac32c7b0 Mon Sep 17 00:00:00 2001
+From: Laurent Vivier <lvivier@redhat.com>
+Date: Sat, 7 Mar 2026 00:31:41 +0000
+Subject: [PATCH] qmi_wwan: allow max_mtu above hard_mtu to control rx_urb_size
+
+Backport the upstream stable fix to the pinned Linux 6.12.74 base used by
+Mega Edition. QMI devices negotiate USB receive transfer sizes larger than
+the network MTU; allowing qmi_wwan to raise max_mtu restores usbnet's
+rx_urb_size control without allowing oversized network packets.
+
+Upstream commit: 55f854dd5bdd8e19b936a00ef1f8d776ac32c7b0
+Cc: stable@vger.kernel.org
+---
+ drivers/net/usb/qmi_wwan.c   | 4 ++--
+ drivers/net/usb/usbnet.c     | 7 ++++---
+ include/linux/usb/usbnet.h   | 1 +
+ 3 files changed, 7 insertions(+), 5 deletions(-)
+
+--- a/drivers/net/usb/qmi_wwan.c
++++ b/drivers/net/usb/qmi_wwan.c
+@@ -928,7 +928,7 @@ static int qmi_wwan_resume(struct usb_interface *intf)
+ 
+ static const struct driver_info	qmi_wwan_info = {
+ 	.description	= "WWAN/QMI device",
+-	.flags		= FLAG_WWAN | FLAG_SEND_ZLP,
++	.flags		= FLAG_WWAN | FLAG_NOMAXMTU | FLAG_SEND_ZLP,
+ 	.bind		= qmi_wwan_bind,
+ 	.unbind		= qmi_wwan_unbind,
+ 	.manage_power	= qmi_wwan_manage_power,
+@@ -937,7 +937,7 @@ static const struct driver_info	qmi_wwan_info = {
+ 
+ static const struct driver_info	qmi_wwan_info_quirk_dtr = {
+ 	.description	= "WWAN/QMI device",
+-	.flags		= FLAG_WWAN | FLAG_SEND_ZLP,
++	.flags		= FLAG_WWAN | FLAG_NOMAXMTU | FLAG_SEND_ZLP,
+ 	.bind		= qmi_wwan_bind,
+ 	.unbind		= qmi_wwan_unbind,
+ 	.manage_power	= qmi_wwan_manage_power,
+--- a/drivers/net/usb/usbnet.c
++++ b/drivers/net/usb/usbnet.c
+@@ -1829,11 +1829,12 @@ usbnet_probe(struct usb_interface *udev, const struct usb_device_id *prod)
+ 		if ((dev->driver_info->flags & FLAG_NOARP) != 0)
+ 			net->flags |= IFF_NOARP;
+ 
+-		if (net->max_mtu > (dev->hard_mtu - net->hard_header_len))
++		if ((dev->driver_info->flags & FLAG_NOMAXMTU) == 0 &&
++		    net->max_mtu > (dev->hard_mtu - net->hard_header_len))
+ 			net->max_mtu = dev->hard_mtu - net->hard_header_len;
+ 
+-		if (net->mtu > net->max_mtu)
+-			net->mtu = net->max_mtu;
++		if (net->mtu > (dev->hard_mtu - net->hard_header_len))
++			net->mtu = dev->hard_mtu - net->hard_header_len;
+ 
+ 	} else if (!info->in || !info->out)
+ 		status = usbnet_get_endpoints (dev, udev);
+--- a/include/linux/usb/usbnet.h
++++ b/include/linux/usb/usbnet.h
+@@ -132,6 +132,7 @@ struct driver_info {
+ #define FLAG_MULTI_PACKET	0x2000
+ #define FLAG_RX_ASSEMBLE	0x4000	/* rx packets may span >1 frames */
+ #define FLAG_NOARP		0x8000	/* device can't do ARP */
++#define FLAG_NOMAXMTU		0x10000	/* allow max_mtu above hard_mtu */
+ 
+ 	/* init device ... can sleep, or cause probe() failure */
+ 	int	(*bind)(struct usbnet *, struct usb_interface *);
