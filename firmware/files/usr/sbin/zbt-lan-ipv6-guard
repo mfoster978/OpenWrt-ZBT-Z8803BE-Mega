@@ -5,7 +5,9 @@
 
 . /usr/lib/zbt/mwan-runtime.sh
 
-STATE=${ZBT_LAN_IPV6_STATE:-/etc/zbt-lan-ipv6-guard.state}
+# Runtime ownership is intentionally ephemeral. After reboot Auto can safely
+# re-adopt a disabled stock LAN, while Manual never takes ownership of it.
+STATE=${ZBT_LAN_IPV6_STATE:-/tmp/zbt-lan-ipv6-guard.state}
 LOCK=${ZBT_LAN_IPV6_LOCK:-/var/lock/zbt-lan-ipv6-guard.lock}
 INTERVAL=${ZBT_LAN_IPV6_INTERVAL:-10}
 
@@ -57,8 +59,17 @@ zbt_lan_ipv6_suppress() {
 		fi
 		return 0
 	fi
+	# Selecting Auto/Disabled explicitly gives the guard permission to manage
+	# an already-disabled stock LAN (for example a configuration retained from
+	# an earlier manual workaround). Remember the normal server/server baseline
+	# so a later delegated prefix or Manual policy can restore it.
+	if [ "$pair" = disabled:disabled ]; then
+		zbt_lan_ipv6_state_save || return 1
+		zbt_lan_ipv6_log "action=adopt pair=$pair result=ok"
+		return 0
+	fi
 	# Only take control of the ordinary OpenWrt server/server configuration.
-	# Relay/hybrid/custom/previously-disabled setups are owner-managed.
+	# Relay/hybrid/mixed setups are owner-managed and are never overwritten.
 	[ "$pair" = server:server ] || {
 		zbt_lan_ipv6_log "action=skip reason=custom-lan-ipv6 pair=$pair"
 		return 0
@@ -139,6 +150,8 @@ zbt_lan_ipv6_once() {
 	policy=$(uci -q get "qmodem.$modem.lan_ipv6_policy")
 	case "$policy" in
 		auto)
+			# QModem's explicit relay/extended-prefix features are advanced owner
+			# choices and take precedence over Mega's PD guard.
 			if [ "$(uci -q get "qmodem.$modem.ra_master")" = 1 ] || [ "$(uci -q get "qmodem.$modem.extend_prefix")" = 1 ]; then
 				zbt_lan_ipv6_release
 			elif zbt_lan_ipv6_has_pd "${modem}v6"; then
