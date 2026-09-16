@@ -1,0 +1,50 @@
+name: Prepare LAN IPv6 guard
+on:
+  push:
+    branches: [lan-ipv6-guard-20260916]
+    paths: ['.github/workflows/prepare-lan-ipv6-guard.yml']
+permissions:
+  contents: write
+jobs:
+  prepare:
+    if: github.repository == 'mfoster978/OpenWrt-ZBT-Z8803BE-Mega'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install test tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends busybox jq patch ripgrep gcc nftables iproute2 python3 conntrack iptables
+      - name: Apply hash-guarded integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/lan-ipv6-guard-20260916
+          python3 tools/prepare-lan-ipv6-guard-20260916.py
+      - name: Run focused IPv6 guard and existing QMI MTU tests
+        run: node --test firmware/tests/lan-ipv6-guard.test.cjs firmware/tests/qmi-mtu*.test.cjs
+      - name: Validate firmware inputs
+        run: bash firmware/scripts/check-build-inputs.sh
+      - name: Validate pinned QModem patch stack and cached builds
+        run: node firmware/tests/check-patches.cjs
+      - name: Commit validated source to review branch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add firmware/files/usr/sbin/zbt-qmodem-profile \
+            firmware/files/usr/sbin/zbt-lan-ipv6-guard \
+            firmware/files/etc/init.d/zbt-lan-ipv6-guard \
+            firmware/files/etc/uci-defaults/98-zbt-lan-ipv6-guard \
+            firmware/docker/build-openwrt.sh \
+            firmware/scripts/check-build-inputs.sh \
+            firmware/tests/check-patches.cjs \
+            firmware/tests/qmodem-mtu-cache.cjs
+          git commit -m 'Add opt-in carrier-neutral LAN IPv6 guard for cellular WANs'
+          git push origin HEAD:refs/heads/lan-ipv6-guard-20260916
+          git rev-parse HEAD
