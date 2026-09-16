@@ -1,0 +1,14 @@
+--- a/modules/luci-mod-system/htdocs/luci-static/resources/view/system/mounts.js
++++ b/modules/luci-mod-system/htdocs/luci-static/resources/view/system/mounts.js
+@@ -126,6 +126,11 @@ return view.extend({
+ 	o.onclick = this.handleMountAll.bind(this, m);
+ 	o.inputstyle = 'reload';
+ 
++	o = s.option(form.Button, '_mega_apps', _('Mega application storage'), _('Safely adopt an existing ext4 USB partition or explicitly erase and prepare one whole USB drive for large router applications.'));
++	o.onclick = function() { window.location.assign(L.url('admin', 'system', 'mega-storage')); };
++	o.inputstyle = 'action';
++	o.inputtitle = _('Open application-storage setup');
++
+ 	o = s.option(form.Flag, 'anon_swap', _('Anonymous Swap'), _('Mount swap not specifically configured'));
+ 	o.default = o.disabled;
+ 	o.rmempty = false;

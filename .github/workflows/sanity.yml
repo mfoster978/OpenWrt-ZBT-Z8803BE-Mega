@@ -95,6 +95,16 @@ jobs:
           NODE_PATH="$RUNNER_TEMP/zbt-ui/node_modules" node firmware/tests/mega-about-ui.cjs
           NODE_PATH="$RUNNER_TEMP/zbt-ui/node_modules" node firmware/tests/mega-mobile-theme-ui.cjs
           NODE_PATH="$RUNNER_TEMP/zbt-ui/node_modules" node firmware/tests/firmware-updater-ui.cjs
+          NODE_PATH="$RUNNER_TEMP/zbt-ui/node_modules" node firmware/tests/mega-storage-ui.cjs
+          NODE_PATH="$RUNNER_TEMP/zbt-ui/node_modules" node firmware/tests/adguard-home-ui.cjs
+  usb-adguard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate USB storage and AdGuard safety scripts
+        run: |
+          node --test firmware/tests/adguard-usb.test.cjs
   firmware-updater:
     runs-on: ubuntu-latest
     timeout-minutes: 10

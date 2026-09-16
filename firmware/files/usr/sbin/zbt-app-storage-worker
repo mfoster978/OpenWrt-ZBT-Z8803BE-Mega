@@ -1,0 +1,41 @@
+#!/bin/sh
+. /usr/lib/zbt/app-storage.sh
+
+job="$1"
+mode="$2"
+token="$3"
+confirmation="$4"
+mega_valid_id "$job" || exit 2
+case "$mode" in adopt|erase) ;; *) exit 2 ;; esac
+mkdir -p "$MEGA_APPS_JOBS" || exit 1
+job_file="$MEGA_APPS_JOBS/$job.json"
+write_job() {
+	phase="$1"
+	error="${2:-}"
+	tmp="$job_file.tmp"
+	mega_json_init
+	json_add_boolean ok true
+	json_add_string id "$job"
+	json_add_string phase "$phase"
+	json_add_string error "$error"
+	json_dump > "$tmp" && mv "$tmp" "$job_file"
+}
+exec 9>/var/lock/zbt-app-storage.lock
+if ! flock -n 9; then
+	write_job error "Another storage operation is already running."
+	exit 1
+fi
+write_job working
+if [ "$mode" = adopt ]; then
+	/usr/sbin/zbt-app-storage adopt "$token"
+	rc=$?
+else
+	/usr/sbin/zbt-app-storage erase "$token" "$confirmation"
+	rc=$?
+fi
+if [ "$rc" -eq 0 ]; then
+	write_job ready
+else
+	logger -t zbt-app-storage "storage preparation failed mode=$mode code=$rc"
+	write_job error "USB storage preparation failed safety checks. Re-scan the device and try again."
+fi

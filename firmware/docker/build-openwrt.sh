@@ -111,6 +111,15 @@ elif ! patch --dry-run --batch --fuzz=0 --reverse -p1 -d feeds/luci < "$resource
   echo 'Mega LuCI resource-version patch does not match pinned LuCI; refusing a cache-stale build' >&2
   exit 3
 fi
+# Add one reviewed entry point to the pinned standard Mount Points page while
+# keeping all destructive storage work behind Mega's authenticated backend.
+app_storage_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/luci-mounts-mega-app-storage.patch"
+if patch --dry-run --batch --fuzz=0 --forward -p1 -d feeds/luci < "$app_storage_patch" >/dev/null; then
+  patch --batch --fuzz=0 --forward -p1 -d feeds/luci < "$app_storage_patch"
+elif ! patch --dry-run --batch --fuzz=0 --reverse -p1 -d feeds/luci < "$app_storage_patch" >/dev/null; then
+  echo 'Mega application-storage Mount Points patch does not match pinned LuCI' >&2
+  exit 3
+fi
 # Handle shared MLD device lists in the standard Wireless enable/disable
 # controls. Disabling a standalone AP must not shut off a peer MLO link.
 wireless_mlo_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/luci-wireless-mlo-toggle.patch"
@@ -422,6 +431,7 @@ make defconfig
 # cannot ship an older dialer, QModem UI, MLO writer, or MWAN metric editor.
 make package/feeds/luci/luci-base/clean
 make package/feeds/luci/luci-mod-network/clean
+make package/feeds/luci/luci-mod-system/clean
 make package/base-files/clean
 make package/feeds/qmodem/qmodem/clean
 make package/feeds/qmodem/tom_modem/clean

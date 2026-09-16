@@ -1,0 +1,32 @@
+#!/bin/sh
+. /usr/lib/zbt/adguard.sh
+
+case "$1:$2" in
+	list:*)
+		echo '{"status":{},"offer":{},"install":{"token":"String"},"job":{"id":"String"},"configure":{"username":"String","password":"String"},"set_enabled":{"enabled":"Boolean"},"uninstall":{"confirmation":"String"}}'
+		;;
+	call:status)
+		read -r _
+		/usr/sbin/zbt-adguard status
+		;;
+	call:offer)
+		read -r _
+		/usr/sbin/zbt-adguard offer
+		;;
+	call:install)
+		/usr/sbin/zbt-adguard install
+		;;
+	call:job)
+		/usr/sbin/zbt-adguard job
+		;;
+	call:configure)
+		/usr/sbin/zbt-adguard configure
+		;;
+	call:set_enabled)
+		/usr/sbin/zbt-adguard enable
+		;;
+	call:uninstall)
+		/usr/sbin/zbt-adguard uninstall
+		;;
+	*) exit 1 ;;
+esac

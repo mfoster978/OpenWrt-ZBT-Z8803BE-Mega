@@ -1,0 +1,79 @@
+#!/bin/sh
+. /usr/lib/zbt/app-storage.sh
+
+reply_error() {
+	mega_json_init
+	json_add_boolean ok false
+	json_add_string error "$1"
+	json_dump
+}
+
+prepare() {
+	input="$(cat)"
+	mode="$(printf '%s' "$input" | jsonfilter -e '@.mode' 2>/dev/null)"
+	token="$(printf '%s' "$input" | jsonfilter -e '@.id' 2>/dev/null)"
+	confirmation="$(printf '%s' "$input" | jsonfilter -e '@.confirmation' 2>/dev/null)"
+	case "$mode" in adopt|erase) ;; *) reply_error "Invalid preparation mode."; return 1 ;; esac
+	mega_valid_id "$token" || { reply_error "The device selection expired. Scan again."; return 1; }
+	mega_token_read "$token" || { reply_error "The device changed or the selection expired. Scan again."; return 1; }
+	[ "$mode:$TOKEN_KIND" = adopt:partition ] || [ "$mode:$TOKEN_KIND" = erase:disk ] || {
+		reply_error "The selected operation does not match this device."
+		return 1
+	}
+	[ "$mode" != erase ] || [ "$confirmation" = "$TOKEN_CONFIRMATION" ] || {
+		reply_error "The erase confirmation does not match."
+		return 1
+	}
+	job="$(mega_random_id)"
+	mkdir -p "$MEGA_APPS_JOBS" || { reply_error "Unable to create storage job."; return 1; }
+	chmod 0700 "$(dirname "$MEGA_APPS_JOBS")" "$MEGA_APPS_JOBS" 2>/dev/null
+	mega_json_init
+	json_add_boolean ok true
+	json_add_string id "$job"
+	json_add_string phase queued
+	json_dump > "$MEGA_APPS_JOBS/$job.json" || {
+		reply_error "Unable to save storage job."
+		return 1
+	}
+	chmod 0600 "$MEGA_APPS_JOBS/$job.json"
+	nohup /usr/sbin/zbt-app-storage-worker "$job" "$mode" "$token" "$confirmation" </dev/null >/dev/null 2>&1 &
+	mega_json_init
+	json_add_boolean ok true
+	json_add_string id "$job"
+	json_dump
+}
+
+job_status() {
+	input="$(cat)"
+	job="$(printf '%s' "$input" | jsonfilter -e '@.id' 2>/dev/null)"
+	mega_valid_id "$job" || { reply_error "Invalid storage job."; return 1; }
+	file="$MEGA_APPS_JOBS/$job.json"
+	[ -f "$file" ] || { reply_error "Storage job not found."; return 1; }
+	jq -ce --arg id "$job" '
+		if type == "object" and .ok == true and .id == $id and
+			(.phase == "queued" or .phase == "working" or .phase == "ready" or .phase == "error") and
+			(.error | type) == "string"
+		then . else error("invalid job") end' "$file" 2>/dev/null ||
+		reply_error "Storage job state is unreadable."
+}
+
+release_storage() {
+	exec 9>/var/lock/zbt-app-storage.lock
+	flock -n 9 || { reply_error "Another storage operation is running."; return 1; }
+	if /usr/sbin/zbt-app-storage release; then
+		echo '{"ok":true}'
+	else
+		reply_error "Disable and uninstall AdGuard Home before releasing application storage."
+		return 1
+	fi
+}
+
+case "$1:$2" in
+	list:*) echo '{"candidates":{},"status":{},"job":{"id":"String"},"prepare":{"mode":"String","id":"String","confirmation":"String"},"release":{}}' ;;
+	call:candidates) read -r _; /usr/sbin/zbt-app-storage candidates ;;
+	call:status) read -r _; /usr/sbin/zbt-app-storage status ;;
+	call:job) job_status ;;
+	call:prepare) prepare ;;
+	call:release) read -r _; release_storage ;;
+	*) exit 1 ;;
+esac

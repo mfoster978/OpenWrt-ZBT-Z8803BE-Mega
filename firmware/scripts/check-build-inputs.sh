@@ -12,6 +12,7 @@ for script in \
   firmware/files/etc/uci-defaults/50-zbt-luci-web-recovery \
   firmware/files/etc/uci-defaults/53-zbt-modem-display-labels-v2 \
   firmware/files/etc/uci-defaults/40-zbt-usb-tether-defaults \
+  firmware/files/etc/uci-defaults/90-zbt-adguard-usb \
   firmware/files/etc/uci-defaults/73-zbt-us-wifi-defaults \
   firmware/files/etc/uci-defaults/95-mwan3-defaults \
   firmware/files/etc/uci-defaults/99-zbt-route-priority-repair \
@@ -30,6 +31,11 @@ for script in \
   firmware/files/usr/sbin/zbt-luci-backend-check \
   firmware/files/usr/sbin/zbt-mwan-preset \
   firmware/files/usr/sbin/zbt-qmodem-watchdog-loop \
+  firmware/files/usr/sbin/zbt-app-storage \
+  firmware/files/usr/sbin/zbt-app-storage-worker \
+  firmware/files/usr/sbin/zbt-adguard \
+  firmware/files/usr/sbin/zbt-adguard-install \
+  firmware/files/usr/sbin/zbt-adguard-guard \
   firmware/scripts/apply-router-defaults.sh \
   firmware/scripts/verify-router-runtime.sh; do
   sh -n "${script}"
@@ -40,6 +46,8 @@ test -x firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v3
 test -x firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v4
 test -x firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v5
 test -x firmware/files/usr/libexec/rpcd/zbt.wifi
+test -x firmware/files/usr/libexec/rpcd/zbt.storage
+test -x firmware/files/usr/libexec/rpcd/zbt.adguard
 test -x firmware/files/usr/sbin/zbt-speedify-control
 test -x firmware/files/etc/uci-defaults/99-zbt-5g-adaptive-v2
 grep -Fq 'redial_attempts=1' firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v2
@@ -138,6 +146,9 @@ grep -Fq "readfile('/rom/etc/zbt-mega-build.json')" \
   firmware/patches/luci-mega-resource-version.patch
 grep -Fq 'luci-mega-resource-version.patch' firmware/docker/build-openwrt.sh
 grep -Fq 'make package/feeds/luci/luci-base/clean' firmware/docker/build-openwrt.sh
+test -s firmware/patches/luci-mounts-mega-app-storage.patch
+grep -Fq 'luci-mounts-mega-app-storage.patch' firmware/docker/build-openwrt.sh
+grep -Fq 'make package/feeds/luci/luci-mod-system/clean' firmware/docker/build-openwrt.sh
 
 # US is the factory regulatory domain on every MT7996 radio. Numeric UCI
 # txpower overrides are forbidden: the driver must retain its regulatory and
@@ -326,6 +337,17 @@ grep -Fq 'KSMBD LuCI enable-toggle patch does not match pinned LuCI feed' \
 grep -Fq "option enable '0'" firmware/files/etc/config/usbipd
 python3 -m json.tool firmware/files/usr/share/luci/menu.d/zbt-usb-services.json >/dev/null
 grep -Fq 'admin/system/mounts' firmware/files/usr/share/luci/menu.d/zbt-usb-services.json
+grep -Fq '"path": "system/mega-storage"' firmware/files/usr/share/luci/menu.d/zbt-applications.json
+grep -Fq '"path": "services/adguard-home"' firmware/files/usr/share/luci/menu.d/zbt-applications.json
+grep -Fq '"zbt.storage"' firmware/files/usr/share/rpcd/acl.d/zbt-storage.json
+grep -Fq '"zbt.adguard"' firmware/files/usr/share/rpcd/acl.d/zbt-adguard.json
+grep -Fq "AGH_SHA256='3f7893c18e8aaadc456d0452839190561c306ca95175a2254958be80a769c1ae'" firmware/files/usr/lib/zbt/adguard.sh
+grep -Fq "AGH_RELEASE='v0.107.79'" firmware/files/usr/lib/zbt/adguard.sh
+grep -Fq '/mnt/mega-apps/adguardhome' firmware/files/usr/lib/zbt/adguard.sh
+grep -Fq '--no-check-update' firmware/files/usr/lib/zbt/adguard.sh
+grep -Fq 'mklabel gpt mkpart primary ext4 1MiB 100%' firmware/files/usr/lib/zbt/app-storage.sh
+grep -Fq 'option dns_owned' firmware/files/etc/config/zbt_adguard
+grep -Fq 'option target' firmware/files/etc/config/zbt_apps
 test -s firmware/docs/usb-tethering-storage-sharing.md
 grep -Fq "['usb', _('USB & Sharing')" firmware/files/www/luci-static/resources/view/zbt8803be/mega-about-v2.js
 grep -Fq 'Safe starting point: nothing is silently shared.' firmware/files/www/luci-static/resources/view/zbt8803be/mega-about-v2.js
@@ -380,6 +402,9 @@ for component in \
   firmware/files/www/luci-static/resources/zbt-mega-mobile.css \
   firmware/files/www/luci-static/resources/view/system/mega-update.js \
   firmware/files/www/luci-static/resources/view/system/mega-update.css \
+  firmware/files/www/luci-static/resources/view/system/mega-storage.js \
+  firmware/files/www/luci-static/resources/view/services/adguard-home.js \
+  firmware/files/www/luci-static/resources/view/system/mega-apps.css \
   firmware/files/www/luci-static/resources/view/network/quick-wifi.js; do
   test -s "$component" || { echo "Missing Mega component: $component" >&2; exit 1; }
 done
@@ -387,11 +412,14 @@ test -x firmware/files/usr/libexec/rpcd/zbt.firmware
 for metadata in \
   firmware/files/usr/share/luci/menu.d/luci-app-zbt-about.json \
   firmware/files/usr/share/luci/menu.d/zbt-firmware.json \
+  firmware/files/usr/share/luci/menu.d/zbt-applications.json \
   firmware/files/usr/share/luci/menu.d/zbt-speedify-launcher.json \
   firmware/files/usr/share/luci/menu.d/zbt-quick-wifi.json \
   firmware/files/usr/share/rpcd/acl.d/luci-app-speedify.json \
   firmware/files/usr/share/rpcd/acl.d/zbt-speedify.json \
   firmware/files/usr/share/rpcd/acl.d/zbt-firmware.json \
+  firmware/files/usr/share/rpcd/acl.d/zbt-storage.json \
+  firmware/files/usr/share/rpcd/acl.d/zbt-adguard.json \
   firmware/files/usr/share/rpcd/acl.d/zbt-quick-wifi.json \
   firmware/files/usr/share/rpcd/acl.d/luci-app-zbt-about.json; do
   python3 -m json.tool "$metadata" >/dev/null

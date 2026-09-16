@@ -37,13 +37,37 @@ Trust, pairing, hotspot entitlement, and reconnect behavior are controlled partl
 
 ## USB storage
 
-**Services → USB Storage** opens OpenWrt's standard Mount Points page. The image includes USB mass-storage and UAS drivers plus ext4, exFAT, FAT, and UTF-8 filename support.
+**Services → USB Storage** opens OpenWrt's standard Mount Points page. **System → Application Storage** is the guarded Mega wizard for USB-only application storage. The image includes USB mass-storage and UAS drivers plus ext4, exFAT, FAT, and UTF-8 filename support.
 
 1. Use a powered enclosure or hub when the disk may exceed the router port's available current.
 2. Confirm detection with `lsusb`, `block info`, and `logread`.
 3. Create a mount configuration with a stable UUID or label rather than relying on a changing `/dev/sdX` name.
 4. Mount it at a deliberate location such as `/mnt/storage` and verify the mount after a reboot.
 5. Only after the mount is reliable should an application or SMB share depend on that path.
+
+### Mega application-storage wizard (recommended for router apps)
+
+The Mega wizard is designed for removable-media safety:
+
+- only USB block devices are shown;
+- internal flash, root/overlay devices, mounted/busy partitions, and ambiguous devices are rejected;
+- users may either adopt an existing ext4 partition non-destructively or erase one full USB disk after a typed confirmation that includes the exact device identity;
+- the final mount is always by UUID at `/mnt/mega-apps` and must verify as a real mounted filesystem, not just a directory.
+
+The **Release storage** action removes only the mount configuration and never erases the drive. It is blocked while AdGuard Home is installed.
+
+## AdGuard Home (USB-only full version)
+
+Open **Services → AdGuard Home** for the Mega-managed full installation:
+
+- installation is refused unless the configured `/mnt/mega-apps` UUID is mounted and verified;
+- the official pinned ARM64 archive is downloaded, checksum-verified, and extracted directly on USB;
+- binary, configuration, filters, query logs, statistics, backup/update staging, and runtime work files all stay under `/mnt/mega-apps/adguardhome`;
+- dnsmasq DHCP/local DNS support is kept while DNS ownership is transactionally moved to AdGuard on port 53 and rolled back on failure.
+
+Disable keeps USB data and immediately restores dnsmasq DNS. Uninstall restores dnsmasq DNS first, then removes only `/mnt/mega-apps/adguardhome` without formatting the drive.
+
+If the USB mount disappears or no longer matches the configured UUID, Mega stops AdGuard and restores dnsmasq automatically.
 
 Unmount removable media before unplugging it. Filesystem support does not provide a backup, encryption, RAID, or protection from sudden power loss.
 

@@ -1,0 +1,25 @@
+#!/bin/sh
+. /usr/lib/zbt/app-storage.sh
+
+case "$1" in
+	candidates) mega_storage_candidates ;;
+	status) mega_storage_status ;;
+	verify)
+		uuid="$(uci -q get "$MEGA_APPS_CONFIG.storage.uuid")"
+		[ -n "$uuid" ] && mega_mount_verified "$uuid"
+		;;
+	adopt)
+		mega_adopt_partition "$2"
+		rc=$?
+		mega_token_consume "$2"
+		exit "$rc"
+		;;
+	erase)
+		mega_erase_disk "$2" "$3"
+		rc=$?
+		mega_token_consume "$2"
+		exit "$rc"
+		;;
+	release) mega_storage_release ;;
+	*) exit 2 ;;
+esac

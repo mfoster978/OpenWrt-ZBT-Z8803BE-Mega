@@ -1,0 +1,16 @@
+#!/bin/sh
+. /usr/lib/zbt/adguard.sh
+
+case "$1" in
+	status) agh_status ;;
+	offer) agh_install_offer ;;
+	install) agh_install_start ;;
+	job) agh_install_status ;;
+	configure) agh_configure ;;
+	enable) agh_set_enabled ;;
+	uninstall) agh_uninstall ;;
+	dns-takeover) agh_dns_takeover ;;
+	dns-restore) agh_dns_restore ;;
+	verify) agh_installed ;;
+	*) exit 2 ;;
+esac

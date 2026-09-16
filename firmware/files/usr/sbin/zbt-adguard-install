@@ -1,0 +1,62 @@
+#!/bin/sh
+. /usr/lib/zbt/adguard.sh
+
+job="$1"
+mega_valid_id "$job" || exit 2
+exec 9>/var/lock/zbt-adguard.lock
+if ! flock -n 9; then
+	agh_job_write "$job" error "Another AdGuard operation is already running."
+	exit 1
+fi
+fail() {
+	logger -t zbt-adguard "USB installation failed phase=$1"
+	rm -rf -- "$AGH_STAGING/$job"
+	agh_job_write "$job" error "$2"
+	exit 1
+}
+agh_storage_ready || fail storage "The verified USB storage was removed."
+[ "$(uci -q get "$AGH_CONFIG_NAME.main.installed")" != 1 ] || fail state "AdGuard Home is already installed."
+mkdir -p "$AGH_STAGING/$job" || fail staging "Unable to create USB staging."
+chmod 0700 "$AGH_ROOT" "$AGH_STAGING" "$AGH_STAGING/$job"
+archive="$AGH_STAGING/$job/$AGH_ARCHIVE.part"
+agh_job_write "$job" downloading
+curl --proto '=https' --tlsv1.2 -fL --retry 3 --retry-all-errors \
+	--connect-timeout 20 --max-time 600 -o "$archive" "$AGH_URL" ||
+	fail download "The official AdGuard Home download failed."
+agh_storage_ready || fail storage "The verified USB storage was removed during download."
+actual_size="$(wc -c < "$archive" | tr -d ' ')"
+[ "$actual_size" = "$AGH_SIZE" ] || fail size "The AdGuard Home download size did not match the reviewed release."
+agh_job_write "$job" verifying
+printf '%s  %s\n' "$AGH_SHA256" "$archive" | sha256sum -c - >/dev/null ||
+	fail checksum "The AdGuard Home checksum did not match."
+tar -tzf "$archive" > "$AGH_STAGING/$job/members" ||
+	fail archive "The AdGuard Home archive is unreadable."
+awk '
+	BEGIN { ok=1 }
+	/^\// || /(^|\/)\.\.(\/|$)/ || $0 !~ /^AdGuardHome\// { ok=0 }
+	END { exit !ok }
+' "$AGH_STAGING/$job/members" ||
+	fail archive_paths "The AdGuard Home archive contains unsafe paths."
+agh_job_write "$job" extracting
+mkdir -p "$AGH_STAGING/$job/unpack"
+tar -xzf "$archive" -C "$AGH_STAGING/$job/unpack" ||
+	fail extract "The AdGuard Home archive could not be extracted."
+candidate="$AGH_STAGING/$job/unpack/AdGuardHome/AdGuardHome"
+[ -f "$candidate" ] && [ ! -L "$candidate" ] || fail binary "The AdGuard Home binary is missing or unsafe."
+chmod 0755 "$candidate"
+"$candidate" --version 2>/dev/null | grep -Fq "$AGH_RELEASE" ||
+	fail version "The extracted AdGuard Home version did not match."
+rm -f "$archive" "$AGH_STAGING/$job/members"
+rm -rf -- "$AGH_CURRENT"
+mv "$AGH_STAGING/$job/unpack/AdGuardHome" "$AGH_CURRENT" ||
+	fail activate "Unable to activate the USB installation."
+mkdir -p "$AGH_CONFIG_DIR" "$AGH_WORK/tmp"
+chmod 0700 "$AGH_CURRENT" "$AGH_CONFIG_DIR" "$AGH_WORK" "$AGH_WORK/tmp"
+rm -rf -- "$AGH_STAGING/$job"
+uci -q batch <<-EOF
+	set $AGH_CONFIG_NAME.main.installed='1'
+	set $AGH_CONFIG_NAME.main.enabled='0'
+	set $AGH_CONFIG_NAME.main.version='$AGH_RELEASE'
+EOF
+uci commit "$AGH_CONFIG_NAME" || fail metadata "Unable to save installation metadata."
+agh_job_write "$job" credentials

@@ -1,0 +1,15 @@
+{
+  "zbt-storage": {
+    "description": "Inspect and explicitly prepare verified USB application storage",
+    "read": {
+      "ubus": {
+        "zbt.storage": [ "candidates", "status", "job" ]
+      }
+    },
+    "write": {
+      "ubus": {
+        "zbt.storage": [ "prepare", "release" ]
+      }
+    }
+  }
+}

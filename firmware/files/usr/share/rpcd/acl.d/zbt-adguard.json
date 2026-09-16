@@ -1,0 +1,15 @@
+{
+  "zbt-adguard": {
+    "description": "Inspect and explicitly manage USB-only AdGuard Home",
+    "read": {
+      "ubus": {
+        "zbt.adguard": [ "status", "job" ]
+      }
+    },
+    "write": {
+      "ubus": {
+        "zbt.adguard": [ "offer", "install", "configure", "set_enabled", "uninstall" ]
+      }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+#!/bin/sh
+[ "$ACTION" = remove ] || exit 0
+(
+	sleep 1
+	if [ "$(uci -q get zbt_adguard.main.enabled)" = 1 ] &&
+		! /usr/sbin/zbt-app-storage verify; then
+		logger -t zbt-adguard "block removal invalidated application storage; stopping AdGuard"
+		/etc/init.d/zbt-adguard stop
+		/usr/sbin/zbt-adguard dns-restore
+	fi
+) </dev/null >/dev/null 2>&1 &

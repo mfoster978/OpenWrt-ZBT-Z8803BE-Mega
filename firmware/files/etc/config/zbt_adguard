@@ -1,0 +1,7 @@
+config adguard 'main'
+	option installed '0'
+	option enabled '0'
+	option dns_owned '0'
+	option release 'v0.107.79'
+	option web_port '3000'
+	option dnsmasq_port '54'

@@ -1,0 +1,34 @@
+#!/bin/sh
+failures=0
+while sleep 3; do
+	enabled="$(uci -q get zbt_adguard.main.enabled)"
+	installed="$(uci -q get zbt_adguard.main.installed)"
+	if [ "$enabled" != 1 ] || [ "$installed" != 1 ]; then
+		failures=0
+		/usr/sbin/zbt-adguard dns-restore >/dev/null 2>&1
+		continue
+	fi
+	if ! /usr/sbin/zbt-app-storage verify; then
+		logger -t zbt-adguard "verified USB application storage disappeared; restoring router DNS"
+		/etc/init.d/zbt-adguard stop
+		/usr/sbin/zbt-adguard dns-restore
+		failures=0
+		continue
+	fi
+	if pidof AdGuardHome >/dev/null 2>&1; then
+		failures=0
+	else
+		failures=$((failures + 1))
+		if [ "$failures" -ge 3 ]; then
+			logger -t zbt-adguard "verified USB is present but AdGuard is stopped; requesting a guarded restart"
+			/etc/init.d/zbt-adguard start
+			sleep 2
+			if ! pidof AdGuardHome >/dev/null 2>&1; then
+				logger -t zbt-adguard "AdGuard restart failed; restoring router DNS"
+				/etc/init.d/zbt-adguard stop
+				/usr/sbin/zbt-adguard dns-restore
+			fi
+			failures=0
+		fi
+	fi
+done
