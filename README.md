@@ -37,7 +37,7 @@
 > This firmware is only for the **ZBTLink ZBT-Z8803BE** device IDs listed below. A successful CI build proves that the source, packages, root filesystem, metadata, and images are internally consistent; it does not replace testing on physical hardware. Back up the router before flashing and keep a recovery method available.
 
 > [!NOTE]
-> **Speedify is supported and integrated in Mega Edition.** Its official packages are automatically downloaded, checksum-verified, installed, and exposed in LuCI after the router first obtains HTTPS connectivity. Users do not need to run a manual `wget | sh` installer. A Speedify account and any applicable subscription remain the user's responsibility.
+> **Speedify is supported and integrated in Mega Edition, but is off by default.** Enable it from the Speedify LuCI page to download, checksum-verify, install, and start the official packages after the router obtains HTTPS connectivity. Users do not need to run a manual `wget | sh` installer. A Speedify account and any applicable subscription remain the user's responsibility.
 
 ## At a glance
 
@@ -90,7 +90,7 @@ Mega Edition combines a wide selection of add-on packages with custom-developed 
 | Guarded modem watchdog and automated recovery | On for both modem slots; confirmed sustained outages try one targeted redial, then use slot-specific GPIO power cycling if Internet remains down. The separate QModem monitor remains off. |
 | Modem 1 / Modem 2 routing | Modem 1 is always primary; Modem 2 is health-checked failover only. |
 | Live Speed Test Utility | Runs only when you start a test; it does not automatically consume cellular data in the background. |
-| Speedify | Dependencies are baked in and its first-online installer is enabled. Bonding still requires your own account and setup; no credentials are preconfigured. |
+| Speedify | Off by default. Its LuCI **Enable Speedify** control starts the checksum-pinned installer and runtime; turning it off stops the tunnel stack and removes Speedify forwarding. Bonding still requires your own account and setup. |
 | Tailscale and OpenVPN | Available for your own account/tunnel configuration; no user VPN connection is preconfigured. |
 | Android/iPhone USB tethering | Drivers and Apple pairing tools are ready; a supported phone binds to `usb_tether` after owner-side tethering/Trust setup. |
 | USB storage, extroot, SMB shares, and USB over IP | Storage, ext4 formatting, and external-overlay tools are ready. Mounts, the KSMBD server, and the USB/IP server are not activated until the owner configures/enables them. |
@@ -132,7 +132,7 @@ Installed does not mean every feature is actively controlling traffic. Keep unus
 - Both modem power rails are seeded on during initial setup; later operator power choices are preserved.
 - QMI/MBIM paths using `quectel-CM-M -d` use the passive `zbtqmi` netifd protocol: the connection manager owns addresses and routes, while observed state is published to netifd without a competing DHCP client. ECM/RNDIS retain their protocol-specific behavior.
 - QMI publishes its actual addresses/routes to netifd before refreshing each modem tracker. A live session is no longer torn down by a stale mwan3-offline timer. Direct per-interface IPv4/IPv6 probes drive guarded GPIO recovery, independently of radio registration.
-- Both USB modems use the same startup, APN, protocol, and recovery logic. Each `enable_dial`-enabled slot gets a persistent supervised worker before hardware readiness is assumed; a modem whose dial process exits, loses every local address/default-route path after connecting, whose USB net device/own AT port enumerates late, or whose QModem discovery state is transiently stale is dialed again automatically instead of being abandoned until the Dial button is pressed. The fixed-slot final dispatch also ignores that discovery-only state, so an automatic `dial` request cannot be converted back into `hang`. Initial session establishment is briefly serialized so the backup cannot overlap the primary's netifd/QMI setup. The worker cannot substitute the peer modem. The connection manager applies the MTU reported for each data connection, rather than copying one carrier's value to everyone.
+- Both USB modems use the same startup, APN, protocol, and recovery logic. Each `enable_dial`-enabled slot gets a persistent supervised worker before hardware readiness is assumed; a modem whose dial process exits, loses every local address/default-route path after connecting, whose USB net device/own AT port enumerates late, or whose QModem discovery state is transiently stale is dialed again automatically instead of being abandoned until the Dial button is pressed. The fixed-slot final dispatch also ignores that discovery-only state, so an automatic `dial` request cannot be converted back into `hang`. Initial session establishment is briefly serialized so the backup cannot overlap the primary's netifd/QMI setup. The worker cannot substitute the peer modem. For the exact owned, non-bridged raw-IP QMI device, the live supervisor raises a sub-1500 MTU to 1500 and verifies readback on every session pass; the existing upstream `qmi_wwan` backport lets that MTU resize the USB receive buffer. Other protocols and interfaces are not changed.
 - Blank/auto QMI APNs retain modem/network profile negotiation. A directly identified AT&T US `310/410` SIM gets the data-device fallback `broadband`; every manual APN still wins. Both SIM selectors also offer editable presets for AT&T, FirstNet, T-Mobile, Verizon, Google Fi, and U.S. Cellular.
 - SIM information reads the subscriber number from the full `AT+CNUM` response and falls back to the SIM's standard Own Numbers (`ON` / EF-MSISDN) phonebook. It says explicitly when neither store is provisioned; the modem cannot reconstruct an unrecorded number from ICCID or IMSI.
 - QModem's nearby-cell button runs Quectel's full LTE/5G `AT+QSCAN=3,1` with its documented network-dependent timeout instead of treating a three-second timeout as an empty result. It falls back to `AT+QENG="neighbourcell"` and always includes the registered serving cell when available.
@@ -285,7 +285,7 @@ Only fresh, successful samples count toward the speed threshold. DNS, TLS, timeo
 
 ## Speedify
 
-Speedify is optional proprietary software and is not embedded with credentials. Version `17.1.0-r12947` is installed on the first boot that has working HTTPS connectivity.
+Speedify is optional proprietary software and is not embedded with credentials. It is off by default. Open the Speedify LuCI page and select **Enable Speedify** to install version `17.1.0-r12947` once HTTPS connectivity is available. The same page can turn it off again; doing so stops and disables the installer, guard, VPN daemon and web helper, then removes Speedify forwarding and stale interception without changing normal WAN/Modem routing.
 
 The firmware already contains every required dependency built for its kernel and architecture:
 

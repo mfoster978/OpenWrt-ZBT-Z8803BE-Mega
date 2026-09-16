@@ -22,6 +22,9 @@ function fixture(options = {}, body = 'zbt_qmi_session "$DB/child"; echo result=
     fs.mkdirSync(path.join(dir, 'sys/class/net', dev), { recursive: true });
     fs.writeFileSync(path.join(dir, 'sys/class/net', dev, 'ifindex'), index);
   }
+  fs.mkdirSync(path.join(dir, 'sys/class/net/wwan8/qmi'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'sys/class/net/wwan8/qmi/raw_ip'), 'Y\n');
+  fs.writeFileSync(path.join(dir, 'sys/class/net/wwan8/mtu'), '1472\n');
   fs.mkdirSync(path.join(dir, '4_1_dir'));
   fs.writeFileSync(path.join(dir, '4_1_dir/4_1.pid'), '1'); // stale PID must never be killed
   fs.mkdirSync(path.join(dir, 'track/4_1'), { recursive: true });
@@ -43,6 +46,10 @@ uci() {
 }
 ip() {
   case "$*" in
+    'link set dev wwan8 mtu 1500')
+      printf 'ip %s\\n' "$*" >> "$DB/calls"
+      [ "$MTU_WRITE_FAIL" != 1 ] || return 2
+      printf '1500\\n' > "$ZBT_SYSFS/class/net/wwan8/mtu" ;;
     '-o -4 addr show'*) [ "$ADDR4" != 0 ] && echo '17: wwan8 inet 192.0.0.2/27 scope global wwan8' ;;
     '-o -6 addr show'*) [ "$ADDR6" = 1 ] && echo '17: wwan8 inet6 2001:db8::2/64 scope global' ;;
     '-4 route show table main default dev wwan8')
@@ -98,7 +105,9 @@ test('QMI child failure cleans the selected slot, both families and stale PID, t
   }
   assert.match(f.calls, /up 4_1\nup 4_1v6/);
   assert.match(f.calls, /down 4_1\ndown 4_1v6/);
-  assert.doesNotMatch(f.calls, /wwan3|down 2_1|network restart|mtu|metric/);
+  assert.equal(f.calls.split('ip link set dev wwan8 mtu 1500').length - 1, 1);
+  assert.match(f.calls, /action=normalize-mtu old=1472 new=1500 result=verified/);
+  assert.doesNotMatch(f.calls, /wwan3|down 2_1|network restart|metric/);
   assert.equal(fs.existsSync(path.join(f.dir, '4_1_dir/4_1.pid')), false);
 });
 test('QMI connectivity recovery is delegated, never an address or stale tracker timer', () => {
@@ -150,6 +159,21 @@ test('QMI bridging is excluded from WAN-address watchdog and device flushing', (
   const f = fixture({}, 'bridge_enabled=1; zbt_qmi_session "$DB/child"; echo result=$?');
   assert.doesNotMatch(f.calls, /failed for 120/);
   assert.doesNotMatch(f.calls, /ip .*flush/);
+  assert.doesNotMatch(f.calls, / mtu /);
   const guarded = fixture({}, 'touch "$DB/sys/class/net/wwan8/master"; zbt_qmi_flush; echo safe');
   assert.equal(guarded.calls, '');
+});
+test('QMI MTU normalization requires the owned raw-IP device generation', () => {
+  const nonRaw = fixture({}, 'rm "$DB/sys/class/net/wwan8/qmi/raw_ip"; zbt_qmi_normalize_mtu; cat "$DB/sys/class/net/wwan8/mtu"');
+  assert.equal(nonRaw.out, '1472\n');
+  assert.doesNotMatch(nonRaw.calls, / mtu /);
+  const replaced = fixture({}, 'echo 99 > "$DB/sys/class/net/wwan8/ifindex"; zbt_qmi_normalize_mtu || echo refused; cat "$DB/sys/class/net/wwan8/mtu"');
+  assert.equal(replaced.out, 'refused\n1472\n');
+  assert.doesNotMatch(replaced.calls, / mtu /);
+});
+test('QMI MTU write failures are retried but log only once while continuously failing', () => {
+  const f = fixture({ MTU_WRITE_FAIL: '1' });
+  assert.ok(f.calls.split('ip link set dev wwan8 mtu 1500').length - 1 > 1);
+  assert.equal(f.calls.split('action=normalize-mtu new=1500 result=failed').length - 1, 1);
+  assert.doesNotMatch(f.calls, /result=verified/);
 });

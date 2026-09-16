@@ -1,7 +1,7 @@
 #!/bin/sh
 # QMI child lifecycle and netifd publication. The device-bound watchdog owns
 # Internet and kernel-path recovery; this supervisor owns only its CM child.
-# No modem AT writes, SIM resets, MTU override, network restart or metric edits.
+# No modem AT writes, SIM resets, network restart or metric edits.
 
 zbt_qmi_now() {
 	local uptime rest
@@ -17,6 +17,22 @@ zbt_qmi_owned() {
 	[ -n "$qmi_ifindex" ] && [ "$index" = "$qmi_ifindex" ] || return 1
 	# Never flush a LAN bridge or a device currently enslaved to one.
 	[ ! -e "${ZBT_SYSFS:-/sys}/class/net/$current/master" ]
+}
+zbt_qmi_normalize_mtu() {
+	local raw_ip current_mtu verified_mtu
+	case "$modem_config" in 4_1|2_1) ;; *) return 0 ;; esac
+	[ "$bridge_enabled" != 1 ] || return 0
+	zbt_qmi_owned || return 1
+	raw_ip="${ZBT_SYSFS:-/sys}/class/net/$modem_netcard/qmi/raw_ip"
+	[ -r "$raw_ip" ] || return 0
+	[ "$(cat "$raw_ip" 2>/dev/null)" = Y ] || return 0
+	current_mtu=$(cat "${ZBT_SYSFS:-/sys}/class/net/$modem_netcard/mtu" 2>/dev/null)
+	case "$current_mtu" in ''|*[!0-9]*) return 1 ;; esac
+	[ "$current_mtu" -lt 1500 ] || return 0
+	ip link set dev "$modem_netcard" mtu 1500 || return 1
+	verified_mtu=$(cat "${ZBT_SYSFS:-/sys}/class/net/$modem_netcard/mtu" 2>/dev/null)
+	[ "$verified_mtu" = 1500 ] || return 1
+	logger -t zbt-qmi "slot=$modem_config device=$modem_netcard action=normalize-mtu old=$current_mtu new=1500 result=verified"
 }
 
 zbt_qmi_flush() {
@@ -91,7 +107,7 @@ zbt_qmi_cleanup() {
 
 zbt_qmi_session() {
 	local qmi_ifindex cm_pid='' qmi_published4='' qmi_published6='' family interface
-	local exit_reason=cm-exited exit_status=1
+	local exit_reason=cm-exited exit_status=1 qmi_mtu_warned=0
 	. /usr/lib/zbt/mwan-runtime.sh
 	. /usr/lib/zbt/qmi-publish.sh
 	case "$modem_config" in 4_1|2_1) ;; *) return 1 ;; esac
@@ -111,6 +127,12 @@ zbt_qmi_session() {
 	while zbt_qmi_child_alive; do
 		if [ "$bridge_enabled" != 1 ]; then
 			zbt_qmi_owned || { exit_reason=usb-device-changed; break; }
+			if zbt_qmi_normalize_mtu; then
+				qmi_mtu_warned=0
+			elif [ "$qmi_mtu_warned" -eq 0 ]; then
+				logger -t zbt-qmi "slot=$modem_config device=$modem_netcard action=normalize-mtu new=1500 result=failed"
+				qmi_mtu_warned=1
+			fi
 			# Address/default-route publication is allowed to disappear and be
 			# repaired independently. In particular, a short netifd or mwan3
 			# transition must never kill a healthy CM data call. The central

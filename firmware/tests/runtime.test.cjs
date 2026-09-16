@@ -674,7 +674,7 @@ luci_healthy && echo healthy || echo unhealthy
   assert.doesNotMatch(installedBranch, /install_bundle|download_bundle/);
 });
 
-test('Speedify has a ROM-resident LuCI setup screen across sysupgrade', () => {
+test('Speedify has the same opt-in LuCI control before and after vendor UI installation', () => {
   const menuTree = JSON.parse(file('firmware/files/usr/share/luci/menu.d/zbt-speedify-launcher.json'));
   const menu = menuTree['admin/speedify'];
   const appRoute = menuTree['admin/speedify/app'];
@@ -683,26 +683,51 @@ test('Speedify has a ROM-resident LuCI setup screen across sysupgrade', () => {
   const launcher = file('firmware/files/www/luci-static/resources/view/speedify/launcher.js');
   const wrapper = file('firmware/files/usr/share/zbt/speedify-luci-wrapper.js');
   const installer = file('firmware/files/usr/sbin/speedify-installer-loop');
+  const guard = file('firmware/files/usr/sbin/zbt-speedify-guard');
+  const control = file('firmware/files/usr/sbin/zbt-speedify-control');
+  const bootstrap = file('firmware/files/etc/uci-defaults/99-speedify-bootstrap');
+  const rpcBackend = file('firmware/files/usr/libexec/rpcd/zbt.speedify');
+  const diagnosticAcl = JSON.parse(file('firmware/files/usr/share/rpcd/acl.d/zbt-speedify.json'))['zbt-speedify'];
   assert.deepEqual(menu.action, { type: 'view', path: 'speedify/launcher' });
   assert.deepEqual(appRoute.action, { type: 'view', path: 'speedify/speedify' });
   assert.equal(appRoute.firstchild_ineligible, true);
   assert.deepEqual(menu.depends.acl, ['luci-app-speedify']);
   assert.ok(acl.read.ubus['luci.speedify'].includes('read'));
+  assert.deepEqual(acl.read.ubus['zbt.speedify'], ['status']);
+  assert.deepEqual(acl.write.ubus['zbt.speedify'], ['set_enabled']);
+  assert.deepEqual(diagnosticAcl.write.ubus['zbt.speedify'], ['set_enabled']);
   assert.match(launcher, /L\.url\('admin\/speedify\/app'\)/);
   assert.match(launcher, /target\.protocol = 'https:'/);
   assert.match(launcher, /target\.port = ''/);
   assert.match(launcher, /window\.location\.replace\(target\.href\)/);
   assert.match(view, /Finishing Speedify setup/);
+  assert.match(view, /Enable Speedify/);
+  assert.match(view, /method: 'set_enabled'/);
   assert.doesNotMatch(view, /handleSaveApply:\s*function|fetch\(/);
   assert.match(installer, /install_luci_wrapper \|\| return 1/);
   assert.doesNotMatch(wrapper, /syncOuterHash|window\.location\.replace/);
   assert.match(wrapper, /E\('iframe'/);
+  assert.match(wrapper, /Enable Speedify/);
+  assert.match(wrapper, /if \(!enabled\)/);
+  assert.match(wrapper, /method: 'set_enabled'/);
   assert.match(wrapper, /new URL\('\/luci-app-speedify\/view\/index\.html'/);
   assert.match(wrapper, /app\.search = 'wsPort=match&wsEndpoint=/);
   assert.match(wrapper, /app\.hash = '\/'/);
   assert.doesNotMatch(wrapper, /method: 'activation'|Sign in this router|wsToken=/);
   assert.match(wrapper, /SameSite=Strict/);
-  assert.match(file('firmware/files/etc/uci-defaults/99-speedify-bootstrap'), /rm -f \/tmp\/luci-indexcache/);
+  assert.match(bootstrap, /speedify_bootstrap\.main\.enabled='0'/);
+  assert.match(bootstrap, /zbt-speedify-control sync/);
+  assert.match(installer, /speedify_enabled \|\| exit 0[\s\S]*while :; do[\s\S]*speedify_enabled \|\| exit 0/);
+  assert.match(guard, /speedify_enabled \|\| exit 0[\s\S]*while :; do[\s\S]*speedify_enabled \|\| exit 0/);
+  assert.match(control, /zbt-speedify-guard speedify-installer speedify sfy-ws-auth/);
+  assert.match(control, /sf_disable_firewall/);
+  assert.match(control, /sf_clear_dead_pep/);
+  assert.match(rpcBackend, /set_enabled\(\)/);
+  assert.deepEqual(JSON.parse(shell('uci() { echo 0; }\n' + rpcBackend, {}, ['call', 'status'])),
+    { ok: true, enabled: false, state: 'DISABLED', signed_in: false, tunnel_present: false });
+  assert.deepEqual(JSON.parse(shell(rpcBackend, {}, ['list'])),
+    { status: {}, set_enabled: { enabled: 'Boolean' } });
+  assert.match(bootstrap, /rm -f \/tmp\/luci-indexcache/);
 });
 
 test('LuCI recovery actively repairs a failed first nginx start and a 502 backend', () => {

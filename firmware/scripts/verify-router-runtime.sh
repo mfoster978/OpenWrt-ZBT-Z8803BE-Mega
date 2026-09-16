@@ -25,6 +25,11 @@ for section in 4_1 2_1; do
 		"$(uci -q get "network.$section.metric")"
 	/etc/init.d/qmodem_network modem_status "$section" 2>/dev/null
 	if [ -n "$device" ]; then
+		printf 'raw_ip=%s mtu=%s rx_errors=%s ifindex=%s\n' \
+			"$(cat "/sys/class/net/$device/qmi/raw_ip" 2>/dev/null)" \
+			"$(cat "/sys/class/net/$device/mtu" 2>/dev/null)" \
+			"$(cat "/sys/class/net/$device/statistics/rx_errors" 2>/dev/null)" \
+			"$(cat "/sys/class/net/$device/ifindex" 2>/dev/null)"
 		ip addr show dev "$device" scope global 2>/dev/null
 		ip -4 route show default dev "$device" 2>/dev/null
 	fi
@@ -78,11 +83,12 @@ uci -q show modem_watchdog
 ip -4 route show default
 ip -4 rule show
 mwan3 status 2>/dev/null || true
-ubus -t 12 call zbt.speedify status '{}' 2>/dev/null | jq '{ok, signed_in, state, activation_status, tunnel_present, recent_error, needs_internet, message}' || true
+ubus -t 12 call zbt.speedify status '{}' 2>/dev/null | jq '{ok, enabled, signed_in, state, activation_status, tunnel_present, recent_error, needs_internet, message}' || true
 timeout 5 /usr/share/speedify/speedify_cli show settings 2>/dev/null | jq '{bondingMode, fixedDelay, pep}' || true
 uci -q get 'firewall.@defaults[0].flow_offloading'
 uci -q get 'firewall.@defaults[0].flow_offloading_hw'
 uci -q get speedify_bootstrap.main.throughput_v1
+uci -q get speedify_bootstrap.main.enabled
 printf '\n%s\n' 'Installed UI packages and service health'
 for package in luci-app-mwan3 luci-app-speedtest-lite zbt-speedtest luci-app-tailscale speedify luci-app-speedify; do
 	apk info -e "$package" >/dev/null 2>&1 && printf '%s=installed\n' "$package" || printf '%s=missing\n' "$package"

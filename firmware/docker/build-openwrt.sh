@@ -680,6 +680,7 @@ required_overlay_files=(
   etc/uci-defaults/99-zbt-qmi-netifd-v12
   usr/lib/zbt/qmodem-5g.sh
   usr/libexec/rpcd/zbt.speedify
+  usr/sbin/zbt-speedify-control
   usr/share/rpcd/acl.d/zbt-speedify.json
   etc/uci-defaults/95-mwan3-defaults
   etc/uci-defaults/40-zbt-usb-tether-defaults
@@ -735,7 +736,7 @@ for overlay_file in "${required_overlay_files[@]}"; do
   fi
 done
 echo "Validated files overlay in root filesystem: ${rootfs_dir}"
-for component in usr/sbin/zbt-mwan-apply usr/sbin/zbt-5g-adaptive usr/sbin/zbt-mwan-failback usr/lib/zbt/qmodem-start.sh usr/libexec/rpcd/zbt.wifi usr/sbin/conntrack usr/bin/util-linux-flock; do
+for component in usr/sbin/zbt-mwan-apply usr/sbin/zbt-5g-adaptive usr/sbin/zbt-mwan-failback usr/lib/zbt/qmodem-start.sh usr/libexec/rpcd/zbt.wifi usr/sbin/zbt-speedify-control usr/sbin/conntrack usr/bin/util-linux-flock; do
   test -x "${rootfs_dir}/$component" || { echo "Missing adaptive/failback executable: $component" >&2; exit 4; }
 done
 [ "$(readlink "${rootfs_dir}/etc/rc.d/S99zbt-5g-adaptive")" = ../init.d/zbt-5g-adaptive ] || {
@@ -750,6 +751,9 @@ grep -Fq 'sleep 10' "${rootfs_dir}/usr/lib/zbt/modem-recovery.sh" || {
 if grep -Fq 'kernel-data-path-lost' "${rootfs_dir}/usr/lib/zbt/qmi-session.sh"; then
   echo 'QMI supervisor must not tear down a live CM during route publication gaps' >&2; exit 4;
 fi
+grep -Fq 'ip link set dev "$modem_netcard" mtu 1500' "${rootfs_dir}/usr/lib/zbt/qmi-session.sh" || {
+  echo 'Owned raw-IP QMI MTU normalization is missing from the image' >&2; exit 4;
+}
 grep -Fq 'result=worker-registered' "${rootfs_dir}/usr/lib/zbt/modem-recovery.sh" || {
   echo 'Watchdog recovery does not verify persistent QModem worker registration' >&2; exit 4;
 }
@@ -762,8 +766,17 @@ done
 grep -Fq 'Automatic preferred — modem/network selection (recommended)' \
   "${rootfs_dir}/www/luci-static/resources/view/qmodem/config_advanced.js" || exit 4
 test -x "${rootfs_dir}/usr/sbin/zbt-speedify-guard" &&
-  test -x "${rootfs_dir}/etc/init.d/zbt-speedify-guard" || exit 4
-for overlay_file in usr/lib/zbt/mwan-reconcile.sh usr/sbin/zbt-mwan-apply usr/lib/zbt/5g-state.sh usr/lib/zbt/5g-adaptive.sh usr/lib/zbt/mwan-runtime.sh usr/sbin/zbt-mwan-failback usr/sbin/zbt-5g-adaptive etc/init.d/zbt-5g-adaptive etc/hotplug.d/iface/90-zbt-mwan-failback etc/uci-defaults/99-zbt-5g-adaptive-v1 etc/uci-defaults/99-zbt-5g-adaptive-v2 etc/uci-defaults/99-zbt-modem-recovery-v2 etc/uci-defaults/99-zbt-modem-recovery-v3 etc/uci-defaults/99-zbt-modem-recovery-v4 etc/uci-defaults/99-zbt-modem-recovery-v5 usr/lib/zbt/qmodem-5g.sh usr/lib/zbt/qmi-session.sh usr/lib/zbt/qmodem-start.sh usr/sbin/zbt-wifi-firstboot etc/init.d/zbt-wifi-firstboot etc/uci-defaults/71-zbt-wifi-firstboot usr/lib/zbt/mwan3-speed-metric.sh usr/libexec/rpcd/zbt.speedify usr/share/rpcd/acl.d/zbt-speedify.json usr/share/zbt/speedify-luci-wrapper.js usr/lib/zbt/speedify-routing.sh usr/sbin/zbt-speedify-guard etc/init.d/zbt-speedify-guard etc/uci-defaults/99-zbt-modem-route-v5 etc/uci-defaults/99-zbt-qmi-netifd-v11 etc/uci-defaults/99-zbt-qmi-netifd-v12 www/luci-static/resources/view/network/quick-wifi.js usr/share/luci/menu.d/zbt-quick-wifi.json usr/share/rpcd/acl.d/zbt-quick-wifi.json; do
+  test -x "${rootfs_dir}/etc/init.d/zbt-speedify-guard" &&
+  test -x "${rootfs_dir}/usr/sbin/zbt-speedify-control" || exit 4
+grep -Fq "speedify_bootstrap.main.enabled='0'" \
+  "${rootfs_dir}/etc/uci-defaults/99-speedify-bootstrap" || {
+  echo 'Speedify is not opt-in by default in the image' >&2; exit 4;
+}
+grep -Fq "method: 'set_enabled'" \
+  "${rootfs_dir}/www/luci-static/resources/view/speedify/speedify.js" || {
+  echo 'Speedify LuCI enable control is missing from the image' >&2; exit 4;
+}
+for overlay_file in usr/lib/zbt/mwan-reconcile.sh usr/sbin/zbt-mwan-apply usr/lib/zbt/5g-state.sh usr/lib/zbt/5g-adaptive.sh usr/lib/zbt/mwan-runtime.sh usr/sbin/zbt-mwan-failback usr/sbin/zbt-5g-adaptive etc/init.d/zbt-5g-adaptive etc/hotplug.d/iface/90-zbt-mwan-failback etc/uci-defaults/99-zbt-5g-adaptive-v1 etc/uci-defaults/99-zbt-5g-adaptive-v2 etc/uci-defaults/99-zbt-modem-recovery-v2 etc/uci-defaults/99-zbt-modem-recovery-v3 etc/uci-defaults/99-zbt-modem-recovery-v4 etc/uci-defaults/99-zbt-modem-recovery-v5 usr/lib/zbt/qmodem-5g.sh usr/lib/zbt/qmi-session.sh usr/lib/zbt/qmodem-start.sh usr/sbin/zbt-wifi-firstboot etc/init.d/zbt-wifi-firstboot etc/uci-defaults/71-zbt-wifi-firstboot usr/lib/zbt/mwan3-speed-metric.sh usr/libexec/rpcd/zbt.speedify usr/sbin/zbt-speedify-control usr/share/rpcd/acl.d/zbt-speedify.json usr/share/rpcd/acl.d/luci-app-speedify.json usr/share/zbt/speedify-luci-wrapper.js usr/lib/zbt/speedify-routing.sh usr/sbin/zbt-speedify-guard etc/init.d/zbt-speedify-guard etc/init.d/speedify-installer usr/sbin/speedify-installer-loop etc/uci-defaults/99-speedify-bootstrap www/luci-static/resources/view/speedify/speedify.js etc/uci-defaults/99-zbt-modem-route-v5 etc/uci-defaults/99-zbt-qmi-netifd-v11 etc/uci-defaults/99-zbt-qmi-netifd-v12 www/luci-static/resources/view/network/quick-wifi.js usr/share/luci/menu.d/zbt-quick-wifi.json usr/share/rpcd/acl.d/zbt-quick-wifi.json; do
   cmp "${FILES_OVERLAY_DIR}/${overlay_file}" "${rootfs_dir}/${overlay_file}" || exit 4
 done
 # Check the actual installed dialer and authoritative board defaults, not

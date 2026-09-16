@@ -1,54 +1,78 @@
 #!/bin/sh
-# Read-only daemon status for support diagnostics. Speedify's own UI handles
-# account activation; Mega does not generate or filter sign-in links.
+status() {
+	enabled=$(uci -q get speedify_bootstrap.main.enabled)
+	[ "$enabled" = 1 ] || {
+		echo '{"ok":true,"enabled":false,"state":"DISABLED","signed_in":false,"tunnel_present":false}'
+		return
+	}
+	cli=/usr/share/speedify/speedify_cli
+	if [ ! -x "$cli" ]; then
+		echo '{"ok":false,"enabled":true,"message":"Speedify is not installed yet. Its installer needs working Internet access."}'
+		return
+	fi
+	if ! response=$(timeout 5 "$cli" show user 2>/dev/null); then
+		echo '{"ok":false,"enabled":true,"message":"The Speedify service did not answer. Check its service and Internet connection."}'
+		return
+	fi
+	state=$(timeout 3 "$cli" state 2>/dev/null) || state='{}'
+	error=''
+	for logfile in $(ls -t /tmp/speedify-logs/speedify_*.log 2>/dev/null); do
+		[ -f "$logfile" ] || continue
+		error=$(tail -n 300 "$logfile" | awk '
+			/Not able to login|[Ll]ogin failed|[Aa]uthentication failed/ {
+				if (/ERROR_NO_ROUTER_LICENSE/) error="ERROR_NO_ROUTER_LICENSE"
+				else if (/NETWORK_ERROR/) error="NETWORK_ERROR"
+				else error="AUTHENTICATION_FAILED"
+			}
+			END { print error }')
+		break
+	done
+	tunnel=false
+	[ ! -e /sys/class/net/connectify0 ] || tunnel=true
+	printf '%s' "$response" | jq -ce --arg state "$state" --arg recent_error "$error" --argjson tunnel "$tunnel" '
+		if type != "object" or (.isAutoAccount|type) != "boolean" then error("invalid user reply") else
+		($state | fromjson? // {}) as $daemon |
+		($daemon.state // "UNKNOWN") as $status |
+		(.isAutoAccount==false and (.email|type)=="string" and (.email|length)>0 and
+		 (["LOGGED_IN", "CONNECTING", "CONNECTED", "DISCONNECTING"] | index($status)) != null) as $signed |
+		{ok:true, enabled:true, signed_in:$signed, tunnel_present:$tunnel,
+		 activation_status:(if $signed then "confirmed" elif $status=="LOGGING_IN" then "pending"
+		   elif $recent_error=="ERROR_NO_ROUTER_LICENSE" then "license_pending"
+		   elif $recent_error=="NETWORK_ERROR" or $daemon.action=="connect to internet and retry login" then "network_error"
+		   else "not_signed_in" end),
+		 state:(if (["LOGGED_OUT", "LOGGING_IN", "LOGGED_IN", "CONNECTING", "CONNECTED", "DISCONNECTING"] | index($status)) != null then $status else "UNKNOWN" end),
+		 recent_error:(if $signed then "" else $recent_error end),
+		 needs_internet:($daemon.action == "connect to internet and retry login"),
+		 email:(if (.email|type)=="string" then .email else "" end)} end' 2>/dev/null ||
+		echo '{"ok":false,"enabled":true,"message":"Speedify returned an unreadable account status; sign-in has not been confirmed."}'
+}
+
+set_enabled() {
+	input=$(cat)
+	enabled=$(printf '%s' "$input" | jsonfilter -e '@.enabled' 2>/dev/null)
+	case "$enabled" in
+		true|1) enabled=1 ;;
+		false|0) enabled=0 ;;
+		*) echo '{"ok":false,"error":"enabled must be a boolean"}'; return 1 ;;
+	esac
+	uci -q set "speedify_bootstrap.main.enabled=$enabled" &&
+		uci commit speedify_bootstrap || {
+			echo '{"ok":false,"error":"unable to save setting"}'
+			return 1
+		}
+	if /usr/sbin/zbt-speedify-control apply; then
+		[ "$enabled" = 1 ] &&
+			echo '{"ok":true,"enabled":true}' ||
+			echo '{"ok":true,"enabled":false}'
+	else
+		echo '{"ok":false,"error":"lifecycle apply failed"}'
+		return 1
+	fi
+}
+
 case "$1:$2" in
-	list:*) echo '{"status":{}}'; exit 0 ;;
-	call:status) read -r input ;;
+	list:*) echo '{"status":{},"set_enabled":{"enabled":"Boolean"}}' ;;
+	call:status) read -r input; status ;;
+	call:set_enabled) set_enabled ;;
 	*) exit 1 ;;
-esac
-cli=/usr/share/speedify/speedify_cli
-if [ ! -x "$cli" ]; then
-	echo '{"ok":false,"message":"Speedify is not installed yet. Its installer needs working Internet access."}'
-	exit 0
-fi
-case "$2" in
-	status)
-		if ! response=$(timeout 5 "$cli" show user 2>/dev/null); then
-			echo '{"ok":false,"message":"The Speedify service did not answer. Check its service and Internet connection."}'
-			exit 0
-		fi
-		state=$(timeout 3 "$cli" state 2>/dev/null) || state='{}'
-		# Only fixed error categories leave the daemon log. Never return raw
-		# log lines, activation URLs, device IDs, access tokens or credentials.
-		error=''
-		for logfile in $(ls -t /tmp/speedify-logs/speedify_*.log 2>/dev/null); do
-			[ -f "$logfile" ] || continue
-			error=$(tail -n 300 "$logfile" | awk '
-				/Not able to login|[Ll]ogin failed|[Aa]uthentication failed/ {
-					if (/ERROR_NO_ROUTER_LICENSE/) error="ERROR_NO_ROUTER_LICENSE"
-					else if (/NETWORK_ERROR/) error="NETWORK_ERROR"
-					else error="AUTHENTICATION_FAILED"
-				}
-				END { print error }')
-			break
-		done
-		tunnel=false
-		[ ! -e /sys/class/net/connectify0 ] || tunnel=true
-		printf '%s' "$response" | jq -ce --arg state "$state" --arg recent_error "$error" --argjson tunnel "$tunnel" '
-			if type != "object" or (.isAutoAccount|type) != "boolean" then error("invalid user reply") else
-			($state | fromjson? // {}) as $daemon |
-			($daemon.state // "UNKNOWN") as $status |
-			(.isAutoAccount==false and (.email|type)=="string" and (.email|length)>0 and
-			 (["LOGGED_IN", "CONNECTING", "CONNECTED", "DISCONNECTING"] | index($status)) != null) as $signed |
-			{ok:true, signed_in:$signed, tunnel_present:$tunnel,
-			 activation_status:(if $signed then "confirmed" elif $status=="LOGGING_IN" then "pending"
-			   elif $recent_error=="ERROR_NO_ROUTER_LICENSE" then "license_pending"
-			   elif $recent_error=="NETWORK_ERROR" or $daemon.action=="connect to internet and retry login" then "network_error"
-			   else "not_signed_in" end),
-			 state:(if (["LOGGED_OUT", "LOGGING_IN", "LOGGED_IN", "CONNECTING", "CONNECTED", "DISCONNECTING"] | index($status)) != null then $status else "UNKNOWN" end),
-			 recent_error:(if $signed then "" else $recent_error end),
-			 needs_internet:($daemon.action == "connect to internet and retry login"),
-			 email:(if (.email|type)=="string" then .email else "" end)} end' 2>/dev/null ||
-			echo '{"ok":false,"message":"Speedify returned an unreadable account status; sign-in has not been confirmed."}'
-		;;
 esac

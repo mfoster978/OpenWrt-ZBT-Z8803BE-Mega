@@ -18,6 +18,9 @@ UI_DEPS='luci-nginx python3-light'
 LUCI_WRAPPER='/usr/share/zbt/speedify-luci-wrapper.js'
 LUCI_WRAPPER_TARGET='/www/luci-static/resources/view/speedify/speedify.js'
 INSTALL_LUCI="$(uci -q get speedify_bootstrap.main.install_luci 2>/dev/null || echo 1)"
+speedify_enabled() {
+	[ "$(uci -q get speedify_bootstrap.main.enabled)" = 1 ]
+}
 
 log() {
 	logger -t "$TAG" "$*"
@@ -229,6 +232,7 @@ has_download_connectivity() {
 	curl -fsSI --connect-timeout 10 --max-time 20 "$SPEEDIFY_URL" >/dev/null 2>&1
 }
 
+speedify_enabled || exit 0
 [ "$(cat /etc/apk/arch 2>/dev/null || true)" = "$EXPECTED_ARCH" ] || {
 	log "unsupported APK architecture; expected $EXPECTED_ARCH"
 	exit 1
@@ -266,6 +270,7 @@ fi
 rm -f "$DONE_FILE"
 
 while :; do
+	speedify_enabled || exit 0
 	# A runtime failure is not an installation failure. Reinstalling here
 	# reran the vendor's network/firewall setup every three minutes.
 	if packages_complete; then

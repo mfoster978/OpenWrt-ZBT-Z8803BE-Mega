@@ -25,6 +25,8 @@ for script in \
   firmware/files/etc/hotplug.d/usb/40-zbt-qmodem-autoenable \
   firmware/files/usr/lib/zbt/qmodem-start.sh \
   firmware/files/usr/sbin/speedify-installer-loop \
+  firmware/files/usr/sbin/zbt-speedify-control \
+  firmware/files/usr/sbin/zbt-speedify-guard \
   firmware/files/usr/sbin/zbt-luci-backend-check \
   firmware/files/usr/sbin/zbt-mwan-preset \
   firmware/files/usr/sbin/zbt-qmodem-watchdog-loop \
@@ -38,6 +40,7 @@ test -x firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v3
 test -x firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v4
 test -x firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v5
 test -x firmware/files/usr/libexec/rpcd/zbt.wifi
+test -x firmware/files/usr/sbin/zbt-speedify-control
 test -x firmware/files/etc/uci-defaults/99-zbt-5g-adaptive-v2
 grep -Fq 'redial_attempts=1' firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v2
 grep -Fq '/etc/init.d/modem_watchdog restart' firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v3
@@ -49,6 +52,9 @@ grep -Fq 'modem_watchdog.$key.action=power_cycle' firmware/files/etc/uci-default
 grep -Fq 'zbt_5g_adaptive_opt_in' firmware/files/etc/uci-defaults/99-zbt-5g-adaptive-v2
 grep -Fq 'action=dialer-exited' firmware/files/usr/lib/zbt/qmodem-start.sh
 grep -Fq 'zbt-qmodem-session-start.lock' firmware/files/usr/lib/zbt/qmodem-start.sh
+grep -Fq 'zbt_qmi_normalize_mtu' firmware/files/usr/lib/zbt/qmi-session.sh
+grep -Fq 'ip link set dev "$modem_netcard" mtu 1500' firmware/files/usr/lib/zbt/qmi-session.sh
+grep -Fq '[ "$oldrx" -gt 0 ]' firmware/files/usr/lib/zbt/modem-recovery.sh
 if rg -n 'qmodem\.\$1\.state|qmodem\.\$modem_config\.state' \
   firmware/files/etc/init.d/qmodem_network \
   firmware/files/usr/lib/zbt/qmodem-start.sh \
@@ -384,6 +390,7 @@ for metadata in \
   firmware/files/usr/share/luci/menu.d/zbt-speedify-launcher.json \
   firmware/files/usr/share/luci/menu.d/zbt-quick-wifi.json \
   firmware/files/usr/share/rpcd/acl.d/luci-app-speedify.json \
+  firmware/files/usr/share/rpcd/acl.d/zbt-speedify.json \
   firmware/files/usr/share/rpcd/acl.d/zbt-firmware.json \
   firmware/files/usr/share/rpcd/acl.d/zbt-quick-wifi.json \
   firmware/files/usr/share/rpcd/acl.d/luci-app-zbt-about.json; do
@@ -398,6 +405,13 @@ grep -Fq "ui.changes.apply()" firmware/files/www/luci-static/resources/view/netw
 grep -Fq "target.protocol = 'https:'" firmware/files/www/luci-static/resources/view/speedify/launcher.js
 grep -Fq 'window.location.replace(target.href)' firmware/files/www/luci-static/resources/view/speedify/launcher.js
 grep -Fq "install_luci_wrapper || return 1" firmware/files/usr/sbin/speedify-installer-loop
+grep -Fq "speedify_bootstrap.main.enabled='0'" firmware/files/etc/uci-defaults/99-speedify-bootstrap
+grep -Fq 'zbt-speedify-control sync' firmware/files/etc/uci-defaults/99-speedify-bootstrap
+grep -Fq "method: 'set_enabled'" firmware/files/www/luci-static/resources/view/speedify/speedify.js
+grep -Fq "method: 'set_enabled'" firmware/files/usr/share/zbt/speedify-luci-wrapper.js
+grep -Fq '"set_enabled"' firmware/files/usr/share/rpcd/acl.d/luci-app-speedify.json
+grep -Fq 'sf_disable_firewall' firmware/files/usr/sbin/zbt-speedify-control
+grep -Fq 'sf_clear_dead_pep' firmware/files/usr/sbin/zbt-speedify-control
 if grep -Eq "window.location.replace|syncOuterHash" \
   firmware/files/usr/share/zbt/speedify-luci-wrapper.js; then
   echo 'Speedify must preserve LuCI navigation and not mirror transient login hashes' >&2

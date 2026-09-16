@@ -2,6 +2,11 @@
 set -eu
 
 uci -q get speedify_bootstrap.main >/dev/null 2>&1 || uci -q set speedify_bootstrap.main='installer'
+if ! uci -q get speedify_bootstrap.main.enabled >/dev/null 2>&1; then
+	# Speedify is optional. Kept-config upgrades without an explicit choice
+	# remain disabled rather than unexpectedly starting a VPN tunnel.
+	uci -q set speedify_bootstrap.main.enabled='0'
+fi
 if ! uci -q get speedify_bootstrap.main.install_luci >/dev/null 2>&1; then
 	# This image bakes the matching nginx/Python dependencies. Set to 0 before
 	# installation to skip the proprietary Speedify UI and install core only.
@@ -9,19 +14,13 @@ if ! uci -q get speedify_bootstrap.main.install_luci >/dev/null 2>&1; then
 fi
 uci -q commit speedify_bootstrap
 
-# Enabled even while the optional APK is absent; it stays idle until installed.
-# A kept-config upgrade must repair the vendor firewall again, too.
-/etc/init.d/zbt-speedify-guard enable >/dev/null 2>&1 || true
 
 # A sysupgrade removes the runtime-installed vendor UI. Clear any preserved
 # menu cache so the ROM-resident setup screen is immediately visible while the
 # official APK is downloaded again.
 rm -f /tmp/luci-indexcache /tmp/luci-indexcache.json
 
-# This filename sorts after the cellular defaults, avoiding concurrent network
-# and firewall writes during the first installation attempt.
-if [ -x /etc/init.d/speedify-installer ]; then
-	/etc/init.d/speedify-installer enable >/dev/null 2>&1 || true
-	# rc.d starts this later; starting now races incomplete first-boot setup.
-fi
+# Synchronize rc.d state without starting the installer while first-boot
+# network and firewall defaults are still being applied.
+/usr/sbin/zbt-speedify-control sync >/dev/null 2>&1 || true
 exit 0

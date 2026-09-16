@@ -180,7 +180,7 @@ zbt_recovery_resume() (
 )
 zbt_recovery_check() {
 	local previous_last previous_fails result stage cycle_len
-	local section="$1" key="$2" now fails=0 good=0 last=0 attempts=0 window=0 cycles=0 rx=0 oldrx=0 oldindex=0 index delta=0 reason=unreachable threshold cooldown verify limit action grace
+	local section="$1" key="$2" now fails=0 good=0 last=0 attempts=0 window=0 cycles=0 rx=0 rx_valid=0 oldrx=0 oldindex=0 index delta=0 reason=unreachable threshold cooldown verify limit action grace
 	now=$(zbt_health_now)
 	mkdir -p "$ZBT_RECOVERY_DIR"
 	if ! zbt_recovery_allowed "$section"; then
@@ -195,8 +195,16 @@ zbt_recovery_check() {
 	done
 	index=$ZBT_HEALTH_INDEX
 	rx=$(cat "${ZBT_SYSFS:-/sys}/class/net/$ZBT_HEALTH_DEVICE/statistics/rx_errors" 2>/dev/null)
-	case "$rx" in ''|*[!0-9]*) rx=0 ;; esac
-	[ "$index" != "$oldindex" ] || [ "$rx" -lt "$oldrx" ] || delta=$((rx - oldrx))
+	case "$rx" in
+		''|*[!0-9]*) rx=0 ;;
+		*) rx_valid=1 ;;
+	esac
+	if [ "$index" = "$oldindex" ] &&
+		[ "$rx_valid" -eq 1 ] &&
+		[ "$oldrx" -gt 0 ] &&
+		[ "$rx" -gt "$oldrx" ]; then
+		delta=$((rx - oldrx))
+	fi
 	[ "$delta" -lt 100 ] || reason=rx_errors_growing
 	[ -f "$ZBT_RECOVERY_DIR/$section.qmi-lost" ] && reason=qmi_session_lost
 	threshold=$(zbt_recovery_uint "$(zbt_recovery_get global.ping_fail_threshold)" 3 2 20)

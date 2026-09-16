@@ -100,6 +100,35 @@ sf_repair_firewall() {
 	sf_reload_pending=0
 	sf_log 'repaired exclusive Speedify egress zone, NAT and LAN forwarding'
 }
+sf_disable_firewall() {
+	local section name member aliases='speedify' iface
+	# Never commit someone else's pending LuCI firewall edits.
+	[ -z "$(uci -q changes firewall)" ] || return 1
+	for iface in $(sf_sections network interface); do
+		[ "$(sf_get "network.$iface.device")" != connectify0 ] || aliases="$aliases $iface"
+	done
+	sf_changed=0
+	for section in $(sf_sections firewall zone); do
+		name=$(sf_get "firewall.$section.name")
+		[ "$name" = speedify ] && continue
+		sf_remove_member "firewall.$section.device" connectify0 || return 1
+		for member in $aliases; do
+			sf_remove_member "firewall.$section.network" "$member" || return 1
+		done
+	done
+	for section in $(sf_sections firewall forwarding); do
+		name=$(sf_get "firewall.$section.src"):$(sf_get "firewall.$section.dest")
+		case "$name" in
+			speedify:*|*:speedify)
+				uci -q delete "firewall.$section" || return 1
+				sf_changed=1 ;;
+		esac
+	done
+	[ "$sf_changed" = 1 ] || return 0
+	uci -q commit firewall || return 1
+	sf_firewall_reload || return 1
+	sf_log 'removed Speedify forwarding and non-Speedify tunnel memberships'
+}
 
 sf_tunnel_routes() {
 	# Only disable acceleration for a routed tunnel, not an idle installed UI.

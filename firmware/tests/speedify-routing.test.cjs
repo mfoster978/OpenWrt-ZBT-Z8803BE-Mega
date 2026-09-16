@@ -113,6 +113,29 @@ test('ambiguous custom zones, wrong tunnel device and pending LuCI changes cause
     const f = fixture(extra); assert.equal(run(f, 'sf_repair_firewall && echo changed || echo deferred', env), 'deferred'); assert.equal(f.get('writes'), '');
   }
 });
+test('disabling removes all Speedify forwarding and leaked tunnel memberships while preserving WAN fallback', () => {
+  const f = fixture();
+  run(f, 'sf_disable_firewall');
+  assert.equal(f.get('firewall.lan.device'), 'br-lan');
+  assert.equal(f.get('firewall.lan.network'), 'lan');
+  assert.equal(f.get('firewall.wan.device'), 'eth1');
+  assert.equal(f.get('firewall.wan.network'), 'wan 4_1 2_1');
+  assert.equal(f.get('firewall.to_vpn'), '');
+  assert.equal(f.get('firewall.from_vpn'), '');
+  assert.equal(f.get('firewall.to_wan.dest'), 'wan');
+  assert.equal(f.get('firewall.cfg01.network'), 'speedify', 'inactive zone may remain for a later opt-in');
+  assert.equal(f.get('actions'), 'reload\n');
+  const writes = f.get('writes');
+  run(f, 'sf_disable_firewall');
+  assert.equal(f.get('writes'), writes);
+  assert.equal(f.get('actions'), 'reload\n');
+});
+test('disable cleanup defers when the owner has uncommitted firewall edits', () => {
+  const f = fixture();
+  assert.equal(run(f, 'sf_disable_firewall && echo changed || echo deferred', { PENDING: 'firewall' }), 'deferred');
+  assert.equal(f.get('writes'), '');
+  assert.equal(f.get('actions'), '');
+});
 test('throughput profile is verified and applied once; later choices and account identity survive', () => {
   const f = fixture(); run(f, 'sf_migrate_profile');
   assert.deepEqual(JSON.parse(f.get('settings')), { bondingMode: 'speed', fixedDelay: 0, pep: false });

@@ -390,15 +390,27 @@ test('disabled modem and disabled recovery are read-only; missing GPIO never han
   const f=fixture('echo 0 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; rm "$DB/sys/class/gpio/5g1/value"; cycle; cycle; cycle; cycle');
   assert.doesNotMatch(f.calls,/service /);
 });
-test('power-cycle policy ladders redial then USB reset then GPIO; growing RX errors skip soft redial',()=>{
+test('power-cycle policy ladders redial then USB reset then GPIO; proven RX growth skips soft redial',()=>{
   const f=fixture('echo 1 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; cycle; cycle; cycle; echo 700 > "$DB/clock"; cycle; cycle; cycle; echo 900 > "$DB/clock"; cycle; cycle; cycle');
   assert.match(f.calls,/requesting redial[\s\S]*requesting usb_reset[\s\S]*requesting power_cycle/);
   assert.match(f.calls,/slot=4_1 action=redial result=dispatched[\s\S]*slot=4_1 action=usb_reset result=dispatched[\s\S]*slot=4_1 action=power_cycle result=dispatched/);
-  const bad=fixture('echo 2 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; cycle; cycle; echo 300 > "$DB/sys/class/net/wwan8/statistics/rx_errors"; cycle');
+  const bad=fixture('echo 2 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; echo 25 > "$DB/sys/class/net/wwan8/statistics/rx_errors"; cycle; cycle; echo 300 > "$DB/sys/class/net/wwan8/statistics/rx_errors"; cycle');
   assert.match(bad.calls,/rx_errors_growing; requesting usb_reset/);
   assert.match(bad.calls,/slot=4_1 action=usb_reset result=dispatched/);
   assert.doesNotMatch(bad.calls,/requesting redial|requesting power_cycle/);
   assert.equal(fs.readFileSync(path.join(bad.d,'sys/bus/usb/devices/4-1/authorized'),'utf8').trim(),'1');
+});
+test('zero/uninitialized, flat, reset and re-enumerated RX counters do not mimic an error storm',()=>{
+  for (const body of [
+    'cycle; cycle; echo 300 > "$DB/sys/class/net/wwan8/statistics/rx_errors"; cycle',
+    'echo 300 > "$DB/sys/class/net/wwan8/statistics/rx_errors"; cycle; cycle; cycle',
+    'echo 300 > "$DB/sys/class/net/wwan8/statistics/rx_errors"; cycle; cycle; echo 2 > "$DB/sys/class/net/wwan8/statistics/rx_errors"; cycle',
+    'echo 25 > "$DB/sys/class/net/wwan8/statistics/rx_errors"; cycle; cycle; echo 300 > "$DB/sys/class/net/wwan8/statistics/rx_errors"; echo 99 > "$DB/sys/class/net/wwan8/ifindex"; cycle'
+  ]) {
+    const f=fixture('echo 2 > "$DB/uci/modem_watchdog.modem1.redial_attempts"; '+body);
+    assert.match(f.calls,/requesting redial/);
+    assert.doesNotMatch(f.calls,/rx_errors_growing|requesting usb_reset|requesting power_cycle/);
+  }
 });
 test('three consecutive successes clear failure streak, not a single stray success',()=>{
   const f=fixture('cycle; cycle; cycle; GOOD_DEVICE=wwan8; cycle; GOOD_DEVICE=""; cycle');

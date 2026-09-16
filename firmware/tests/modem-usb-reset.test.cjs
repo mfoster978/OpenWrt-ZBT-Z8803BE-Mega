@@ -103,9 +103,9 @@ logger() { echo "log $*" >> "$DB/calls"; }
 `;
   const script = recovery + '\n' + mocks + String.raw`
 ZBT_HEALTH=offline; ZBT_HEALTH_DEVICE=wwan0; ZBT_HEALTH_INDEX=17
-printf '2 0 0 0 0 0 0 17\n' > "$DB/recovery/4_1.state"
+printf '2 0 0 0 0 0 100 17\n' > "$DB/recovery/4_1.state"
 zbt_recovery_check 4_1 modem1
-printf '2 0 0 1 0 1 0 17\n' > "$DB/recovery/4_1.state"
+printf '2 0 0 1 0 1 100 17\n' > "$DB/recovery/4_1.state"
 zbt_recovery_check 4_1 modem1
 `;
   const result = spawnSync('busybox', ['sh', '-c', script], {

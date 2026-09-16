@@ -1,9 +1,14 @@
 #!/bin/sh
 . /usr/lib/zbt/speedify-routing.sh
+speedify_enabled() {
+	[ "$(uci -q get speedify_bootstrap.main.enabled)" = 1 ]
+}
 
 firewall_stamp=''
 dead_pep=0
+speedify_enabled || exit 0
 while :; do
+	speedify_enabled || exit 0
 	if [ -x /usr/share/speedify/speedify_cli ]; then
 		current_stamp=$(sha256sum /etc/config/firewall 2>/dev/null)
 		if [ "$current_stamp" != "$firewall_stamp" ]; then

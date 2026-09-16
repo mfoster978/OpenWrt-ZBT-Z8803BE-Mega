@@ -22,10 +22,12 @@ window.E = (tag, attrs, children) => {
   return element;
 };
 window.view = { extend: value => value };
-window.rpc = { declare: () => () => Promise.resolve(window.daemonStatus || { ok: true, signed_in: false }) };
+window.rpc = { declare: options => options.method === 'status'
+  ? () => Promise.resolve(window.daemonStatus || { ok: true, enabled: true, signed_in: false })
+  : enabled => { window.speedifyEnabled = enabled; return Promise.resolve({ ok: true, enabled }); } };
 window.poll = { add: fn => { window.refreshDaemonStatus = fn; } };
 window.L = { env: { sessionid: 'browserTestSession' } };
-document.querySelector('main').appendChild(new Function('view', 'E', '_', 'L', 'rpc', 'poll', ${JSON.stringify(wrapper)})(view, E, _, L, rpc, poll).render());
+document.querySelector('main').appendChild(new Function('view', 'E', '_', 'L', 'rpc', 'poll', ${JSON.stringify(wrapper)})(view, E, _, L, rpc, poll).render({ enabled: true }));
 `;
 (async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mega-speedify-native-'));

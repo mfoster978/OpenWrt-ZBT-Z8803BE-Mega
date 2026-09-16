@@ -33,8 +33,11 @@ commands or account operations from that transcript were replayed on a router.
   unrelated interfaces, LAN-to-WAN fallback, modem metrics and MultiWAN rules,
   and defers when LuCI has pending firewall edits or a Speedify zone contains
   ambiguous custom members.
-- `zbt-speedify-guard` is enabled on fresh/kept-config installs and starts after
-  the vendor daemon. It also detects committed firewall changes after APK
+- Speedify is explicitly off by default on fresh and kept configurations that
+  have no owner choice. Both the ROM setup page and installed vendor wrapper
+  expose the same authenticated **Enable Speedify** control.
+- When enabled, `zbt-speedify-guard` starts after the vendor daemon and detects
+  committed firewall changes after APK
   reinstalls. It does not reload an unchanged firewall on every poll.
 - Both flow-offloading switches are turned off when tunnel default/split routes
   or PEP interception exist. A stale live fw4 flowtable is also reloaded away.
@@ -48,8 +51,15 @@ commands or account operations from that transcript were replayed on a router.
   listener check before action. It uses `pep off` and narrowly scoped kernel
   cleanup instead of repeatedly restarting the whole VPN. Healthy IPv4 PEP is
   left running if the user later enables it.
-- The read-only activation RPC and wrapper represent pending, confirmed and
-  failure states without rewriting vendor onboarding flags. The pinned native
+- Turning Speedify off stops and disables the installer, guard, daemon and web
+  helper, removes every forwarding to/from its zone and strips leaked
+  `connectify0`/Speedify memberships from other zones. LAN-to-WAN fallback and
+  unrelated policies remain. Cleanup defers rather than committing pending
+  owner firewall edits.
+- The activation-status RPC remains read-only and the separate authenticated
+  enable method changes only the lifecycle setting before applying it. The
+  wrapper represents pending, confirmed and failure states without rewriting
+  vendor onboarding flags. The pinned native
   UI already persists completed-intro state; the transcript provides no tested
   vendor UI patch to import. The recheck button does not request an activation
   code or reload the iframe. Two-minute guidance is not a claim that a license

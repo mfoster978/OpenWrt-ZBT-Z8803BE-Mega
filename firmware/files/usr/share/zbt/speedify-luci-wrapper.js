@@ -4,6 +4,34 @@
 'require poll';
 
 var readStatus = rpc.declare({ object: 'zbt.speedify', method: 'status', expect: {} });
+var setEnabled = rpc.declare({ object: 'zbt.speedify', method: 'set_enabled', params: [ 'enabled' ], expect: {} });
+
+function enableControl(enabled) {
+	var input = E('input', { type: 'checkbox' });
+	var result = E('span', { 'class': 'cbi-value-description' });
+	input.checked = enabled;
+	return E('div', { 'class': 'cbi-section', id: 'mega-speedify-control' }, [
+		E('h3', {}, _('Speedify service')),
+		E('label', { 'class': 'cbi-value' }, [ input, ' ', _('Enable Speedify') ]),
+		E('p', {}, _('Speedify is optional and disabled by default. Turning it off stops its services and removes LAN-to-Speedify forwarding.')),
+		E('button', {
+			'class': 'cbi-button cbi-button-apply', type: 'button',
+			click: function() {
+				input.disabled = true;
+				result.textContent = _('Applying…');
+				return setEnabled(input.checked).then(function(reply) {
+					if (!reply || !reply.ok) throw new Error('apply failed');
+					window.location.reload();
+				}).catch(function() {
+					input.disabled = false;
+					result.textContent = _('Unable to apply the Speedify setting. Check the system log.');
+				});
+			}
+		}, _('Apply')),
+		' ',
+		result
+	]);
+}
 
 // Speedify owns account sign-in, activation and account-state updates.
 // This wrapper only embeds its official UI and supplies router-session auth.
@@ -11,8 +39,22 @@ return view.extend({
 	handleSaveApply: null,
 	handleSave: null,
 	handleReset: null,
-	load: function() {},
-	render: function() {
+	load: function() {
+		return readStatus();
+	},
+	render: function(initialStatus) {
+		var enabled = !!(initialStatus && initialStatus.enabled);
+		var control = enableControl(enabled);
+		if (!enabled) {
+			return E('div', { 'class': 'cbi-map', id: 'mega-speedify' }, [
+				E('h2', {}, _('Speedify')),
+				control,
+				E('div', { 'class': 'cbi-section' }, [
+					E('h3', {}, _('Speedify is off')),
+					E('p', {}, _('Normal WAN and modem routing continue without Speedify. Enable it above only if you want the optional VPN bonding service.'))
+				])
+			]);
+		}
 		var status = E('p', { 'aria-live': 'polite' }, _('Reading Speedify daemon status…'));
 		var diagnostics = E('div', { 'class': 'cbi-section', id: 'mega-speedify-status' }, [status]);
 		var pendingSince = null;
@@ -66,6 +108,8 @@ return view.extend({
 		app.search = 'wsPort=match&wsEndpoint=/luci-app-speedify/api/ws&updateEndpoint=/luci-app-speedify/cgi/perform-update.sh&restartEndpoint=/luci-app-speedify/cgi/perform-restart.sh&resetEndpoint=/luci-app-speedify/cgi/perform-reset.sh';
 		app.hash = '/';
 		return E('div', { 'class': 'cbi-map', id: 'mega-speedify' }, [
+			E('h2', {}, _('Speedify')),
+			control,
 			diagnostics,
 			E('iframe', {
 				id: 'mega-speedify-dashboard', title: _('Speedify dashboard'),

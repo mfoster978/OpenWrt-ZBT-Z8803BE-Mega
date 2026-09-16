@@ -3,12 +3,14 @@
     "description": "Access the Speedify setup and management screen",
     "read": {
       "ubus": {
+        "zbt.speedify": [ "status" ],
         "luci.speedify": [ "read" ]
       },
       "uci": [ "luci_app_speedify", "network.lan.ipaddr" ]
     },
     "write": {
       "ubus": {
+        "zbt.speedify": [ "set_enabled" ],
         "luci.speedify": [ "write" ]
       },
       "uci": []

@@ -1,0 +1,40 @@
+#!/bin/sh
+. /usr/lib/zbt/speedify-routing.sh
+
+speedify_enabled() {
+	[ "$(uci -q get speedify_bootstrap.main.enabled)" = 1 ]
+}
+service_action() {
+	local service="$1" action="$2"
+	[ -x "/etc/init.d/$service" ] || return 0
+	"/etc/init.d/$service" "$action" >/dev/null 2>&1
+}
+disable_speedify() {
+	local service rc=0
+	for service in zbt-speedify-guard speedify-installer speedify sfy-ws-auth; do
+		service_action "$service" stop || rc=1
+		service_action "$service" disable || rc=1
+	done
+	sf_disable_firewall || {
+		logger -t zbt-speedify "action=disable stage=firewall result=failed"
+		rc=1
+	}
+	sf_clear_dead_pep || {
+		logger -t zbt-speedify "action=disable stage=pep-route result=failed"
+		rc=1
+	}
+	logger -t zbt-speedify "action=disable result=complete"
+	return "$rc"
+}
+enable_speedify() {
+	service_action speedify-installer enable || return 1
+	[ "$1" = sync ] || service_action speedify-installer restart || return 1
+	logger -t zbt-speedify "action=enable mode=$1 result=installer-armed"
+}
+
+case "$1" in
+	sync|apply)
+		if speedify_enabled; then enable_speedify "$1"; else disable_speedify; fi
+		;;
+	*) echo "usage: $0 {sync|apply}" >&2; exit 2 ;;
+esac

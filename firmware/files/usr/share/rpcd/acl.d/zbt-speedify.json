@@ -1,6 +1,7 @@
 {
   "zbt-speedify": {
-    "description": "Read Speedify router sign-in status for diagnostics",
-    "read": { "ubus": { "zbt.speedify": [ "status" ] } }
+    "description": "Control Speedify and read router sign-in status",
+    "read": { "ubus": { "zbt.speedify": [ "status" ] } },
+    "write": { "ubus": { "zbt.speedify": [ "set_enabled" ] } }
   }
 }

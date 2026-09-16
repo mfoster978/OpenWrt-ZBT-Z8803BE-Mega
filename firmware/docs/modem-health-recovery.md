@@ -121,6 +121,19 @@ physical data path and owns the bounded redial/GPIO escalation for a real outage
 This prevents route-policy transitions from tearing down a healthy Modem 1 call
 seconds after it first comes online.
 
+The same owned-session loop corrects the Quectel connection manager's observed
+`1500 -> 1472` change only for the exact non-bridged raw-IP QMI netdev and
+ifindex. It raises sub-1500 MTU to 1500, verifies sysfs readback, and repeats
+idempotently so a reconnect or later vendor write is corrected. The existing
+upstream `qmi_wwan` receive-buffer/max-MTU backport allows that link change to
+resize USB receive URBs. GRO-off and mwan3 timing experiments did not stop the
+physical RX-error growth and are intentionally not included.
+
+RX-error escalation now requires a valid, nonzero prior counter on the same
+interface generation, strict growth, and a delta of at least 100. The first
+sample, a flat value, a reset counter, and USB re-enumeration establish a new
+baseline instead of being misclassified as an error storm.
+
 ## IPv6 and Wi-Fi/LAN failback
 
 IPv4 retains `failover`; IPv6 gets `failover6`, with separate IPv6 trackers and
