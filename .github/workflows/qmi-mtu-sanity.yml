@@ -1,0 +1,34 @@
+name: QMI MTU Sanity
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'firmware/files/usr/lib/zbt/qmi-session.sh'
+      - 'firmware/files/usr/sbin/zbt-qmodem-profile'
+      - 'firmware/patches/qmodem-mtu-*.patch'
+      - 'firmware/patches/qmodem-network-apply-v16.patch'
+      - 'firmware/tests/qmi-mtu*.test.cjs'
+      - '.github/workflows/qmi-mtu-sanity.yml'
+  pull_request:
+    paths:
+      - 'firmware/files/usr/lib/zbt/qmi-session.sh'
+      - 'firmware/files/usr/sbin/zbt-qmodem-profile'
+      - 'firmware/patches/qmodem-mtu-*.patch'
+      - 'firmware/patches/qmodem-network-apply-v16.patch'
+      - 'firmware/tests/qmi-mtu*.test.cjs'
+      - '.github/workflows/qmi-mtu-sanity.yml'
+permissions:
+  contents: read
+jobs:
+  qmi-mtu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install BusyBox shell used by firmware tests
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends busybox
+      - name: Verify configurable QMI MTU enforcement and saved defaults
+        run: node --test firmware/tests/qmi-mtu*.test.cjs

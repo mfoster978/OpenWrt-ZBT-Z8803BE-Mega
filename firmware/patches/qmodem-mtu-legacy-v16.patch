@@ -1,0 +1,16 @@
+--- a/luci/luci-app-qmodem-next/htdocs/luci-static/resources/view/qmodem/network_config.js
++++ b/luci/luci-app-qmodem-next/htdocs/luci-static/resources/view/qmodem/network_config.js
+@@ -330,6 +330,13 @@
+ 	o.default = '0';
+ 	o.rmempty = false;
+ 	o.modalonly = true;
++
++	o = s.option(form.Value, 'mtu', _('QMI MTU'));
++	o.description = _('Mega continuously enforces this MTU on the owned raw-IP QMI interface. Default 1500. Change it only when required by your carrier or network.');
++	o.datatype = 'range(1280,1500)';
++	o.default = '1500';
++	o.rmempty = false;
++	o.modalonly = true;
+ 
+ 	o = s.option(form.Flag, 'en_bridge', _('Bridge Mode'));
+ 	o.description = _('Caution: Only avalible for quectel sdx 5G Modem.');
