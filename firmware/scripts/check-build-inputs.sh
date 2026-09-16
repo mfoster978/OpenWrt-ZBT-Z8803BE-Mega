@@ -5,7 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${repo_root}"
 
 bash -n firmware/docker/build-openwrt.sh
-node --test firmware/tests/qmi-mtu*.test.cjs
+node --test firmware/tests/qmi-mtu*.test.cjs firmware/tests/lan-ipv6-guard.test.cjs
 python3 firmware/tests/mega-release.test.py
 for script in \
   firmware/files/etc/init.d/speedify-installer \
@@ -16,6 +16,7 @@ for script in \
   firmware/files/etc/uci-defaults/90-zbt-adguard-usb \
   firmware/files/etc/uci-defaults/73-zbt-us-wifi-defaults \
   firmware/files/etc/uci-defaults/95-mwan3-defaults \
+  firmware/files/etc/uci-defaults/98-zbt-lan-ipv6-guard \
   firmware/files/etc/uci-defaults/99-zbt-route-priority-repair \
   firmware/files/etc/uci-defaults/99-speedify-bootstrap \
   firmware/files/etc/uci-defaults/99-cellular-multiwan-defaults \
@@ -31,6 +32,8 @@ for script in \
   firmware/files/usr/sbin/zbt-speedify-guard \
   firmware/files/usr/sbin/zbt-luci-backend-check \
   firmware/files/usr/sbin/zbt-mwan-preset \
+  firmware/files/usr/sbin/zbt-lan-ipv6-guard \
+  firmware/files/etc/init.d/zbt-lan-ipv6-guard \
   firmware/files/usr/sbin/zbt-qmodem-watchdog-loop \
   firmware/files/usr/sbin/zbt-app-storage \
   firmware/files/usr/sbin/zbt-app-storage-worker \
@@ -50,6 +53,9 @@ test -x firmware/files/usr/libexec/rpcd/zbt.wifi
 test -x firmware/files/usr/libexec/rpcd/zbt.storage
 test -x firmware/files/usr/libexec/rpcd/zbt.adguard
 test -x firmware/files/usr/sbin/zbt-speedify-control
+test -x firmware/files/usr/sbin/zbt-lan-ipv6-guard
+test -x firmware/files/etc/init.d/zbt-lan-ipv6-guard
+test -x firmware/files/etc/uci-defaults/98-zbt-lan-ipv6-guard
 test -x firmware/files/etc/uci-defaults/99-zbt-5g-adaptive-v2
 grep -Fq 'redial_attempts=1' firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v2
 grep -Fq '/etc/init.d/modem_watchdog restart' firmware/files/etc/uci-defaults/99-zbt-modem-recovery-v3
@@ -64,8 +70,12 @@ grep -Fq 'zbt-qmodem-session-start.lock' firmware/files/usr/lib/zbt/qmodem-start
 grep -Fq 'zbt_qmi_normalize_mtu' firmware/files/usr/lib/zbt/qmi-session.sh
 grep -Fq 'zbt_qmi_target_mtu' firmware/files/usr/lib/zbt/qmi-session.sh
 test -s firmware/patches/qmodem-mtu-v17.patch
+test -s firmware/patches/qmodem-lan-ipv6-v18.patch
 test -s firmware/patches/qmodem-mtu-legacy-v16.patch
 grep -Fq 'qmodem-mtu-v17.patch' firmware/docker/build-openwrt.sh
+grep -Fq 'qmodem-lan-ipv6-v18.patch' firmware/docker/build-openwrt.sh
+grep -Fq 'lan_ipv6_policy=manual' firmware/files/usr/sbin/zbt-qmodem-profile
+grep -Fq 'zbt_lan_ipv6_has_pd' firmware/files/usr/sbin/zbt-lan-ipv6-guard
 grep -Fq 'ip link set dev "$modem_netcard" mtu "$target_mtu"' firmware/files/usr/lib/zbt/qmi-session.sh
 grep -Fq '[ "$oldrx" -gt 0 ]' firmware/files/usr/lib/zbt/modem-recovery.sh
 if rg -n 'qmodem\.\$1\.state|qmodem\.\$modem_config\.state' \

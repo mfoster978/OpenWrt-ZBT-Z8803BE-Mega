@@ -1,0 +1,184 @@
+#!/bin/sh
+# Protect LAN clients from half-working IPv6 when an active cellular WAN has
+# an IPv6 address/default route but no delegated prefix. The default per-modem
+# policy is manual, so existing/custom IPv6 deployments remain untouched.
+
+. /usr/lib/zbt/mwan-runtime.sh
+
+# Runtime ownership is intentionally ephemeral. After reboot Auto can safely
+# re-adopt a disabled stock LAN, while Manual never takes ownership of it.
+STATE=${ZBT_LAN_IPV6_STATE:-/tmp/zbt-lan-ipv6-guard.state}
+LOCK=${ZBT_LAN_IPV6_LOCK:-/var/lock/zbt-lan-ipv6-guard.lock}
+INTERVAL=${ZBT_LAN_IPV6_INTERVAL:-10}
+
+zbt_lan_ipv6_log() {
+	logger -t zbt-lan-ipv6-guard "$*"
+}
+
+zbt_lan_ipv6_state_valid() {
+	[ -r "$STATE" ] || return 1
+	[ "$(sed -n '1p' "$STATE" 2>/dev/null)" = 'version=1' ] || return 1
+	[ "$(sed -n '2p' "$STATE" 2>/dev/null)" = 'ra=server' ] || return 1
+	[ "$(sed -n '3p' "$STATE" 2>/dev/null)" = 'dhcpv6=server' ] || return 1
+}
+
+zbt_lan_ipv6_state_save() {
+	local dir tmp
+	dir=${STATE%/*}; [ "$dir" != "$STATE" ] || dir=.
+	mkdir -p "$dir" || return 1
+	tmp="$STATE.$$"
+	umask 077
+	printf '%s\n' 'version=1' 'ra=server' 'dhcpv6=server' > "$tmp" || return 1
+	mv -f "$tmp" "$STATE"
+}
+
+zbt_lan_ipv6_state_clear() {
+	rm -f "$STATE"
+}
+
+zbt_lan_ipv6_restart_odhcpd() {
+	/etc/init.d/odhcpd restart >/dev/null 2>&1
+}
+
+zbt_lan_ipv6_lan_pair() {
+	local ra dhcpv6
+	ra=$(uci -q get dhcp.lan.ra)
+	dhcpv6=$(uci -q get dhcp.lan.dhcpv6)
+	printf '%s:%s\n' "${ra:-unset}" "${dhcpv6:-unset}"
+}
+
+zbt_lan_ipv6_suppress() {
+	local pair
+	pair=$(zbt_lan_ipv6_lan_pair)
+	if zbt_lan_ipv6_state_valid; then
+		if [ "$pair" != disabled:disabled ]; then
+			# The owner changed LAN IPv6 while Mega held the guard. Never undo it.
+			zbt_lan_ipv6_log "action=relinquish reason=lan-config-changed pair=$pair"
+			zbt_lan_ipv6_state_clear
+			return 0
+		fi
+		return 0
+	fi
+	# Selecting Auto/Disabled explicitly gives the guard permission to manage
+	# an already-disabled stock LAN (for example a configuration retained from
+	# an earlier manual workaround). Remember the normal server/server baseline
+	# so a later delegated prefix or Manual policy can restore it.
+	if [ "$pair" = disabled:disabled ]; then
+		zbt_lan_ipv6_state_save || return 1
+		zbt_lan_ipv6_log "action=adopt pair=$pair result=ok"
+		return 0
+	fi
+	# Only take control of the ordinary OpenWrt server/server configuration.
+	# Relay/hybrid/mixed setups are owner-managed and are never overwritten.
+	[ "$pair" = server:server ] || {
+		zbt_lan_ipv6_log "action=skip reason=custom-lan-ipv6 pair=$pair"
+		return 0
+	}
+	zbt_lan_ipv6_state_save || return 1
+	uci -q set dhcp.lan.ra='disabled' || return 1
+	uci -q set dhcp.lan.dhcpv6='disabled' || return 1
+	uci -q commit dhcp || return 1
+	if zbt_lan_ipv6_restart_odhcpd; then
+		zbt_lan_ipv6_log "action=suppress result=ok"
+		return 0
+	fi
+	zbt_lan_ipv6_log "action=suppress result=odhcpd-restart-failed"
+	return 1
+}
+
+zbt_lan_ipv6_release() {
+	local pair
+	zbt_lan_ipv6_state_valid || return 0
+	pair=$(zbt_lan_ipv6_lan_pair)
+	if [ "$pair" != disabled:disabled ]; then
+		# A manual change wins over the stored guard state.
+		zbt_lan_ipv6_log "action=relinquish reason=lan-config-changed pair=$pair"
+		zbt_lan_ipv6_state_clear
+		return 0
+	fi
+	uci -q set dhcp.lan.ra='server' || return 1
+	uci -q set dhcp.lan.dhcpv6='server' || return 1
+	uci -q commit dhcp || return 1
+	zbt_lan_ipv6_state_clear
+	if zbt_lan_ipv6_restart_odhcpd; then
+		zbt_lan_ipv6_log "action=restore result=ok"
+		return 0
+	fi
+	zbt_lan_ipv6_log "action=restore result=odhcpd-restart-failed"
+	return 1
+}
+
+zbt_lan_ipv6_has_pd() {
+	local status prefix assignment
+	status=$(ubus -t 3 call "network.interface.$1" status 2>/dev/null) || return 1
+	prefix=$(printf '%s\n' "$status" | jsonfilter -e '@["ipv6-prefix"][0].address' 2>/dev/null)
+	[ -n "$prefix" ] && return 0
+	assignment=$(printf '%s\n' "$status" | jsonfilter -e '@["ipv6-prefix-assignment"][0].address' 2>/dev/null)
+	[ -n "$assignment" ]
+}
+
+zbt_lan_ipv6_active_modem() {
+	local winner6 winner4
+	winner6=$(zbt_mwan_winner 6 2>/dev/null) || winner6=''
+	case "$winner6" in
+		4_1v6) printf '%s\n' 4_1; return 0 ;;
+		2_1v6) printf '%s\n' 2_1; return 0 ;;
+		'') ;;
+		*) return 1 ;; # A non-cellular IPv6 WAN owns LAN IPv6 policy.
+	esac
+	winner4=$(zbt_mwan_winner 4 2>/dev/null) || winner4=''
+	case "$winner4" in
+		4_1|2_1) printf '%s\n' "$winner4"; return 0 ;;
+	esac
+	return 1
+}
+
+zbt_lan_ipv6_once() {
+	local modem policy
+	exec 1008>"$LOCK" || return 1
+	flock -n 1008 || return 0
+	modem=$(zbt_lan_ipv6_active_modem) || {
+		zbt_lan_ipv6_release
+		flock -u 1008
+		return 0
+	}
+	[ "$(uci -q get "qmodem.$modem")" = modem-device ] || {
+		zbt_lan_ipv6_release
+		flock -u 1008
+		return 0
+	}
+	policy=$(uci -q get "qmodem.$modem.lan_ipv6_policy")
+	case "$policy" in
+		auto)
+			# QModem's explicit relay/extended-prefix features are advanced owner
+			# choices and take precedence over Mega's PD guard.
+			if [ "$(uci -q get "qmodem.$modem.ra_master")" = 1 ] || [ "$(uci -q get "qmodem.$modem.extend_prefix")" = 1 ]; then
+				zbt_lan_ipv6_release
+			elif zbt_lan_ipv6_has_pd "${modem}v6"; then
+				zbt_lan_ipv6_release
+			else
+				zbt_lan_ipv6_suppress
+			fi ;;
+		disabled) zbt_lan_ipv6_suppress ;;
+		manual|'') zbt_lan_ipv6_release ;;
+		*) zbt_lan_ipv6_log "slot=$modem action=skip reason=invalid-policy"; zbt_lan_ipv6_release ;;
+	esac
+	flock -u 1008
+}
+
+zbt_lan_ipv6_loop() {
+	case "$INTERVAL" in ''|*[!0-9]*) INTERVAL=10 ;; esac
+	[ "$INTERVAL" -ge 2 ] || INTERVAL=2
+	while true; do
+		zbt_lan_ipv6_once
+		sleep "$INTERVAL"
+	done
+}
+
+if [ "${ZBT_LAN_IPV6_LIB_ONLY:-0}" != 1 ]; then
+	case "${1:-once}" in
+		once) zbt_lan_ipv6_once ;;
+		loop) zbt_lan_ipv6_loop ;;
+		*) echo "usage: $0 [once|loop]" >&2; exit 2 ;;
+	esac
+fi

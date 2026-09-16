@@ -1,0 +1,27 @@
+--- a/luci/luci-app-qmodem-next/htdocs/luci-static/resources/view/qmodem/network_config.js
++++ b/luci/luci-app-qmodem-next/htdocs/luci-static/resources/view/qmodem/network_config.js
+@@ -352,1 +352,24 @@
++
++	// Mega LAN IPv6 guard. It is opt-in so existing carrier/custom IPv6
++	// deployments remain untouched until the owner selects a policy.
++	o = s.option(form.ListValue, 'lan_ipv6_policy', _('LAN IPv6'));
++	o.description = _('Controls LAN/Wi-Fi IPv6 while this modem is the active WAN. Manual leaves your LAN settings untouched. Auto temporarily disables RA/DHCPv6 when the cellular WAN has no delegated IPv6 prefix and restores them when a prefix returns.');
++	o.value('manual', _('Manual / preserve LAN IPv6 settings'));
++	o.value('auto', _('Auto: require a delegated prefix'));
++	o.value('disabled', _('Disable LAN IPv6 while this modem is active'));
++	o.default = 'manual';
++	o.rmempty = false;
++	o.modalonly = true;
++	o.retain = true;
++	o.render = function(option_index, section_id, in_table) {
++		if (section_id !== '4_1' && section_id !== '2_1')
++			return Promise.resolve(E('div'));
++		return form.ListValue.prototype.render.apply(this, arguments);
++	};
++	o.parse = function(section_id) {
++		if (section_id !== '4_1' && section_id !== '2_1')
++			return Promise.resolve();
++		return form.ListValue.prototype.parse.apply(this, arguments);
++	};
++	// End Mega LAN IPv6 guard.
+ 	o = s.option(form.Flag, 'force_set_apn', _('Force Set APN'));

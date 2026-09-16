@@ -1,0 +1,6 @@
+#!/bin/sh
+if [ -x /etc/init.d/zbt-lan-ipv6-guard ]; then
+	/etc/init.d/zbt-lan-ipv6-guard enable
+	/etc/init.d/zbt-lan-ipv6-guard start >/dev/null 2>&1 || true
+fi
+exit 0
