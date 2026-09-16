@@ -1,4 +1,5 @@
 name: Prepare LAN IPv6 guard
+# validation retry: patch anchored to unique QModem field
 on:
   push:
     branches: [lan-ipv6-guard-20260916]
