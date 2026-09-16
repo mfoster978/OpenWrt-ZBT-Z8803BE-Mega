@@ -1,0 +1,43 @@
+name: Prepare and verify per-modem MTU source
+on:
+  push:
+    branches: [qmodem-mtu-config-20260916]
+    paths: ['.github/workflows/prepare-mtu-source.yml']
+permissions:
+  contents: write
+jobs:
+  prepare:
+    if: github.repository == 'mfoster978/OpenWrt-ZBT-Z8803BE-Mega'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install test tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends busybox jq patch ripgrep gcc nftables iproute2 python3 conntrack iptables
+      - name: Apply hash-guarded edits only on the review branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/qmodem-mtu-config-20260916
+          python3 tools/prepare-qmodem-mtu-20260916.py
+      - name: Test MTU and unchanged QMI lifecycle
+        run: node --test firmware/tests/qmi-session.test.cjs firmware/tests/qmi-mtu.test.cjs
+      - name: Validate firmware inputs
+        run: bash firmware/scripts/check-build-inputs.sh
+      - name: Validate pinned patches and previous-release cached builds
+        run: node firmware/tests/check-patches.cjs
+      - name: Commit validated source to the review branch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add firmware/files/usr/lib/zbt/qmi-session.sh firmware/docker/build-openwrt.sh firmware/scripts/check-build-inputs.sh firmware/tests/check-patches.cjs
+          git commit -m 'Honor validated per-slot QModem MTU with 1500 default and cached-build-safe UI patch'
+          git push origin HEAD:refs/heads/qmodem-mtu-config-20260916
+          git rev-parse HEAD
