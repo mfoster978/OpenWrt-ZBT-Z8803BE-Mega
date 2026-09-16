@@ -343,8 +343,8 @@ grep -Fq '"zbt.storage"' firmware/files/usr/share/rpcd/acl.d/zbt-storage.json
 grep -Fq '"zbt.adguard"' firmware/files/usr/share/rpcd/acl.d/zbt-adguard.json
 grep -Fq "AGH_SHA256='3f7893c18e8aaadc456d0452839190561c306ca95175a2254958be80a769c1ae'" firmware/files/usr/lib/zbt/adguard.sh
 grep -Fq "AGH_RELEASE='v0.107.79'" firmware/files/usr/lib/zbt/adguard.sh
-grep -Fq '/mnt/mega-apps/adguardhome' firmware/files/usr/lib/zbt/adguard.sh
-grep -Fq '--no-check-update' firmware/files/usr/lib/zbt/adguard.sh
+grep -Fq 'AGH_ROOT="$MEGA_APPS_MOUNT/adguardhome"' firmware/files/usr/lib/zbt/adguard.sh
+grep -Fq -- '--no-check-update' firmware/files/usr/lib/zbt/adguard.sh
 grep -Fq 'mklabel gpt mkpart primary ext4 1MiB 100%' firmware/files/usr/lib/zbt/app-storage.sh
 grep -Fq 'option dns_owned' firmware/files/etc/config/zbt_adguard
 grep -Fq 'option target' firmware/files/etc/config/zbt_apps

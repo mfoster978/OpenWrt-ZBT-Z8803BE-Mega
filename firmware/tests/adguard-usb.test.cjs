@@ -13,7 +13,9 @@ test('storage backend only targets verified USB block devices and ext4', () => {
 	assert.match(src, /mklabel gpt mkpart primary ext4 1MiB 100%/);
 	assert.match(src, /Only an existing ext4 partition with a UUID can be adopted/);
 	assert.match(src, /\/proc\/self\/mountinfo/);
-	assert.match(src, /never sufficient|is never sufficient/);
+	assert.match(src, /mega_token_read/);
+	assert.match(src, /TOKEN_REALPATH/);
+	assert.match(src, /TOKEN_MAJOR_MINOR/);
 	assert.doesNotMatch(src, /\/dev\/sda1|\/dev\/sda[^a-z0-9]/);
 });
 
