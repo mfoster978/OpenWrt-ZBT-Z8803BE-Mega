@@ -59,7 +59,14 @@ fi
 # Reverse only our exact known patches. Do not reset an entire checkout or
 # discard unrelated local edits while preparing a cached build.
 if ! git -C feeds/qmodem diff --quiet; then
-  for patch_name in qmodem-network-apply-v16.patch qmodem-fixed-slot-dial-v15.patch qmodem-fixed-slot-state-v14.patch qmodem-adaptive-safety-v13.patch qmodem-netifd-disabled-v12.patch qmodem-netifd-arming-v11.patch qmodem-netifd-serialization-v10.patch qmodem-health-v9.patch qmodem-adaptive-v8.patch qmodem-session-lifecycle-v7.patch qmodem-radio-rpc-v6.patch qmodem-at-transport-v6.patch qmodem-connectivity-v5.patch qmodem-mega-policy-ui.patch qmodem-performance-ui.patch qmodem-5g-deployment.patch qmodem-cell-discovery.patch qmodem-dual-runtime.patch; do
+  # PR #7 briefly embedded an MTU field in v16 itself. Unwind only that
+  # exact field before the normal versioned stack so both older caches work.
+  # This migration patch is never applied to a new firmware source tree.
+  legacy_mtu_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/qmodem-mtu-legacy-v16.patch"
+  if patch --dry-run --force --fuzz=0 --reverse -p1 -d feeds/qmodem < "$legacy_mtu_patch" >/dev/null; then
+    patch --force --fuzz=0 --reverse -p1 -d feeds/qmodem < "$legacy_mtu_patch"
+  fi
+  for patch_name in qmodem-mtu-v17.patch qmodem-network-apply-v16.patch qmodem-fixed-slot-dial-v15.patch qmodem-fixed-slot-state-v14.patch qmodem-adaptive-safety-v13.patch qmodem-netifd-disabled-v12.patch qmodem-netifd-arming-v11.patch qmodem-netifd-serialization-v10.patch qmodem-health-v9.patch qmodem-adaptive-v8.patch qmodem-session-lifecycle-v7.patch qmodem-radio-rpc-v6.patch qmodem-at-transport-v6.patch qmodem-connectivity-v5.patch qmodem-mega-policy-ui.patch qmodem-performance-ui.patch qmodem-5g-deployment.patch qmodem-cell-discovery.patch qmodem-dual-runtime.patch; do
     stack_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/$patch_name"
     # --force disables GNU patch's automatic reversal guessing. In batch
     # mode alone an absent patch can be applied while asking to reverse it.
@@ -186,6 +193,8 @@ patch --batch --fuzz=0 --forward -p1 -d feeds/qmodem < "$(dirname "${FILES_OVERL
 # Patch the actual packaged view before LuCI minifies it. First-boot text
 # matching alone cannot repair the minified JavaScript shipped in the image.
 patch --batch --fuzz=0 --forward -p1 -d feeds/qmodem < "$(dirname "${FILES_OVERLAY_DIR}")/patches/qmodem-network-apply-v16.patch"
+# Per-slot MTU UI; a separate patch preserves old cached-build unwinding.
+patch --batch --fuzz=0 --forward -p1 -d feeds/qmodem < "$(dirname "${FILES_OVERLAY_DIR}")/patches/qmodem-mtu-v17.patch"
 for apn in broadband NXTGENPHONE ENHANCEDPHONE firstnet-broadband fast.t-mobile.com vzwinternet h2g2 h2g2-t usccinternet; do
   [ "$(grep -Fo "o.value('$apn'" feeds/qmodem/luci/luci-app-qmodem-next/htdocs/luci-static/resources/view/qmodem/network_config.js | wc -l)" -eq 2 ] || {
     echo "US APN preset is not present for both QModem SIM selectors: $apn" >&2; exit 3;
@@ -761,7 +770,7 @@ grep -Fq 'sleep 10' "${rootfs_dir}/usr/lib/zbt/modem-recovery.sh" || {
 if grep -Fq 'kernel-data-path-lost' "${rootfs_dir}/usr/lib/zbt/qmi-session.sh"; then
   echo 'QMI supervisor must not tear down a live CM during route publication gaps' >&2; exit 4;
 fi
-grep -Fq 'ip link set dev "$modem_netcard" mtu 1500' "${rootfs_dir}/usr/lib/zbt/qmi-session.sh" || {
+grep -Fq 'ip link set dev "$modem_netcard" mtu "$target_mtu"' "${rootfs_dir}/usr/lib/zbt/qmi-session.sh" || {
   echo 'Owned raw-IP QMI MTU normalization is missing from the image' >&2; exit 4;
 }
 grep -Fq 'result=worker-registered' "${rootfs_dir}/usr/lib/zbt/modem-recovery.sh" || {

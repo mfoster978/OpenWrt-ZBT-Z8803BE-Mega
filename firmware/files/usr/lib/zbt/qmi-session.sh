@@ -18,38 +18,40 @@ zbt_qmi_owned() {
 	# Never flush a LAN bridge or a device currently enslaved to one.
 	[ ! -e "${ZBT_SYSFS:-/sys}/class/net/$current/master" ]
 }
-
+# Per-slot host-interface policy. Missing or malformed configuration keeps the
+# proven 1500-byte default; never persist a replacement over the user's UCI.
+# Four decimal digits also bound arithmetic and reject lists/shell expressions.
 zbt_qmi_target_mtu() {
-	local target
-	target=$(uci -q get "qmodem.$modem_config.mtu" 2>/dev/null)
-	case "$target" in
-		''|*[!0-9]*) target=1500 ;;
+	local configured_mtu
+	configured_mtu=$(uci -q get "qmodem.$modem_config.mtu") || configured_mtu=''
+	case "$configured_mtu" in
+		[1-9][0-9][0-9][0-9])
+			if [ "$configured_mtu" -ge 1280 ] && [ "$configured_mtu" -le 1500 ]; then
+				printf '%s\n' "$configured_mtu"
+				return 0
+			fi
+			;;
 	esac
-	if [ "$target" -lt 1280 ] || [ "$target" -gt 1500 ]; then
-		target=1500
-	fi
-	printf '%s\n' "$target"
+	printf '%s\n' 1500
 }
 
 zbt_qmi_normalize_mtu() {
-	local raw_ip current_mtu target_mtu verified_mtu
+	local raw_ip current_mtu verified_mtu target_mtu
 	case "$modem_config" in 4_1|2_1) ;; *) return 0 ;; esac
 	[ "$bridge_enabled" != 1 ] || return 0
 	zbt_qmi_owned || return 1
 	raw_ip="${ZBT_SYSFS:-/sys}/class/net/$modem_netcard/qmi/raw_ip"
 	[ -r "$raw_ip" ] || return 0
 	[ "$(cat "$raw_ip" 2>/dev/null)" = Y ] || return 0
-	target_mtu=$(zbt_qmi_target_mtu) || return 1
 	current_mtu=$(cat "${ZBT_SYSFS:-/sys}/class/net/$modem_netcard/mtu" 2>/dev/null)
 	case "$current_mtu" in ''|*[!0-9]*) return 1 ;; esac
+	target_mtu=$(zbt_qmi_target_mtu)
 	[ "$current_mtu" != "$target_mtu" ] || return 0
-	# Keep the proven 1500 path explicit for build validation while allowing a
-	# validated owner-selected QModem value when a carrier/network needs it.
-	if [ "$target_mtu" = 1500 ]; then
-		ip link set dev "$modem_netcard" mtu 1500 || return 1
-	else
-		ip link set dev "$modem_netcard" mtu "$target_mtu" || return 1
-	fi
+	# Recheck the physical device after reading configuration. A prior
+	# supervisor must never change a replacement device or the other modem.
+	zbt_qmi_owned || return 1
+	ip link set dev "$modem_netcard" mtu "$target_mtu" || return 1
+	zbt_qmi_owned || return 1
 	verified_mtu=$(cat "${ZBT_SYSFS:-/sys}/class/net/$modem_netcard/mtu" 2>/dev/null)
 	[ "$verified_mtu" = "$target_mtu" ] || return 1
 	logger -t zbt-qmi "slot=$modem_config device=$modem_netcard action=normalize-mtu old=$current_mtu new=$target_mtu result=verified"
@@ -127,7 +129,7 @@ zbt_qmi_cleanup() {
 
 zbt_qmi_session() {
 	local qmi_ifindex cm_pid='' qmi_published4='' qmi_published6='' family interface
-	local exit_reason=cm-exited exit_status=1 qmi_mtu_warned=0 target_mtu
+	local exit_reason=cm-exited exit_status=1 qmi_mtu_warned=0
 	. /usr/lib/zbt/mwan-runtime.sh
 	. /usr/lib/zbt/qmi-publish.sh
 	case "$modem_config" in 4_1|2_1) ;; *) return 1 ;; esac
@@ -150,8 +152,7 @@ zbt_qmi_session() {
 			if zbt_qmi_normalize_mtu; then
 				qmi_mtu_warned=0
 			elif [ "$qmi_mtu_warned" -eq 0 ]; then
-				target_mtu=$(zbt_qmi_target_mtu)
-				logger -t zbt-qmi "slot=$modem_config device=$modem_netcard action=normalize-mtu new=$target_mtu result=failed"
+				logger -t zbt-qmi "slot=$modem_config device=$modem_netcard action=normalize-mtu new=$(zbt_qmi_target_mtu) result=failed"
 				qmi_mtu_warned=1
 			fi
 			# Address/default-route publication is allowed to disappear and be

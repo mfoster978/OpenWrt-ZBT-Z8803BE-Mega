@@ -10,7 +10,7 @@ const root = path.resolve(__dirname, '../..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'zbt-pinned-patches-'));
 const specs = [
   ['qmodem-firstboot', '0xFar5eer/openwrt25.12_ZBT_Z8803BE', 'edc738504fe8fae81eb15de967456204699b1830', 'zbt-qmodem-rpc-firstboot.patch', ''],
-  ['qmodem', 'FUjr/QModem', 'a8b8a63e5b0853c79d2ad3f1ebbb673a724872bf', ['qmodem-dual-runtime.patch', 'qmodem-cell-discovery.patch', 'qmodem-5g-deployment.patch', 'qmodem-performance-ui.patch', 'qmodem-mega-policy-ui.patch', 'qmodem-connectivity-v5.patch', 'qmodem-at-transport-v6.patch', 'qmodem-radio-rpc-v6.patch', 'qmodem-session-lifecycle-v7.patch', 'qmodem-adaptive-v8.patch', 'qmodem-health-v9.patch', 'qmodem-netifd-serialization-v10.patch', 'qmodem-netifd-arming-v11.patch', 'qmodem-netifd-disabled-v12.patch', 'qmodem-adaptive-safety-v13.patch', 'qmodem-fixed-slot-state-v14.patch', 'qmodem-fixed-slot-dial-v15.patch', 'qmodem-network-apply-v16.patch'], ''],
+  ['qmodem', 'FUjr/QModem', 'a8b8a63e5b0853c79d2ad3f1ebbb673a724872bf', ['qmodem-dual-runtime.patch', 'qmodem-cell-discovery.patch', 'qmodem-5g-deployment.patch', 'qmodem-performance-ui.patch', 'qmodem-mega-policy-ui.patch', 'qmodem-connectivity-v5.patch', 'qmodem-at-transport-v6.patch', 'qmodem-radio-rpc-v6.patch', 'qmodem-session-lifecycle-v7.patch', 'qmodem-adaptive-v8.patch', 'qmodem-health-v9.patch', 'qmodem-netifd-serialization-v10.patch', 'qmodem-netifd-arming-v11.patch', 'qmodem-netifd-disabled-v12.patch', 'qmodem-adaptive-safety-v13.patch', 'qmodem-fixed-slot-state-v14.patch', 'qmodem-fixed-slot-dial-v15.patch', 'qmodem-network-apply-v16.patch', 'qmodem-mtu-v17.patch'], ''],
   ['mt76', 'openwrt/mt76', '39c960c3ada558b4c2e7915772483d3731573d09', ['mt76-mt7996-ps-buffering.patch', 'mt76-mt7996-legacy-client-followup.patch'], ''],
   ['wifi-firstboot', '0xFar5eer/openwrt25.12_ZBT_Z8803BE', 'edc738504fe8fae81eb15de967456204699b1830', 'zbt-wifi-firstboot-v7.patch', ''],
   ['packages', 'openwrt/packages', 'db3b315119519f9194dad8aa668aa40618df9b20', ['mwan3-speed-policy.patch', 'mwan3-mega-lifecycle.patch'], ''],
@@ -86,6 +86,20 @@ function run(command, args, options = {}) {
         const absent = spawnSync('patch', ['--dry-run', '--force', '--fuzz=0', '--reverse', '-p1', '-d', tree],
           { input: patch, encoding: 'utf8' });
         assert.notEqual(absent.status, 0, 'absent latest patch must not be applied while reversing a cached build');
+        // Exercise the builder's previous-release cache path: the new MTU
+        // patch is absent but all older patches are still installed.
+        for (const cachedPatch of [...patches].reverse()) {
+          const reverse = spawnSync('patch', ['--dry-run', '--force', '--fuzz=0', '--reverse', '-p1', '-d', tree],
+            { input: cachedPatch, encoding: 'utf8' });
+          assert.ifError(reverse.error);
+          if (reverse.status === 0)
+            run('patch', ['--force', '--fuzz=0', '--reverse', '-p1', '-d', tree], { input: cachedPatch });
+          else
+            run('patch', ['--dry-run', '--batch', '--fuzz=0', '--forward', '-p1', '-d', tree], { input: cachedPatch });
+        }
+        for (const previousPatch of patches.slice(0, -1))
+          run('patch', ['--batch', '--fuzz=0', '--forward', '-p1', '-d', tree], { input: previousPatch });
+
       }
       run('patch', ['--batch', '--fuzz=0', '--forward', '-p1', '-d', tree], { input: patch });
     }
@@ -142,6 +156,7 @@ function run(command, args, options = {}) {
     if (name === 'qmodem-firstboot') require('./qmodem-firstboot.cjs')(root, tree, run);
     if (name === 'wifi-firstboot') require('./wifi-firstboot.cjs')(root, tree, run);
     if (name === 'qmodem') {
+      require('./qmodem-mtu-cache.cjs')(root, tree, patches, run);
       const init = fs.readFileSync(path.join(tree, 'application/qmodem/files/etc/init.d/qmodem_init'), 'utf8');
       const dial = fs.readFileSync(path.join(tree, 'application/qmodem/files/usr/share/qmodem/modem_dial.sh'), 'utf8');
       assert.match(init, /4-1\|2-1\) logger -t modem_init "fixed modem slot \$slot not enumerated yet/,
