@@ -156,6 +156,7 @@ function run(command, args, options = {}) {
     if (name === 'qmodem-firstboot') require('./qmodem-firstboot.cjs')(root, tree, run);
     if (name === 'wifi-firstboot') require('./wifi-firstboot.cjs')(root, tree, run);
     if (name === 'qmodem') {
+      require('./qmodem-mtu-cache.cjs')(root, tree, patches, run);
       const init = fs.readFileSync(path.join(tree, 'application/qmodem/files/etc/init.d/qmodem_init'), 'utf8');
       const dial = fs.readFileSync(path.join(tree, 'application/qmodem/files/usr/share/qmodem/modem_dial.sh'), 'utf8');
       assert.match(init, /4-1\|2-1\) logger -t modem_init "fixed modem slot \$slot not enumerated yet/,

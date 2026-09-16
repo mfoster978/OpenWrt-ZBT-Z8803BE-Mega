@@ -59,6 +59,13 @@ fi
 # Reverse only our exact known patches. Do not reset an entire checkout or
 # discard unrelated local edits while preparing a cached build.
 if ! git -C feeds/qmodem diff --quiet; then
+  # PR #7 briefly embedded an MTU field in v16 itself. Unwind only that
+  # exact field before the normal versioned stack so both older caches work.
+  # This migration patch is never applied to a new firmware source tree.
+  legacy_mtu_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/qmodem-mtu-legacy-v16.patch"
+  if patch --dry-run --force --fuzz=0 --reverse -p1 -d feeds/qmodem < "$legacy_mtu_patch" >/dev/null; then
+    patch --force --fuzz=0 --reverse -p1 -d feeds/qmodem < "$legacy_mtu_patch"
+  fi
   for patch_name in qmodem-mtu-v17.patch qmodem-network-apply-v16.patch qmodem-fixed-slot-dial-v15.patch qmodem-fixed-slot-state-v14.patch qmodem-adaptive-safety-v13.patch qmodem-netifd-disabled-v12.patch qmodem-netifd-arming-v11.patch qmodem-netifd-serialization-v10.patch qmodem-health-v9.patch qmodem-adaptive-v8.patch qmodem-session-lifecycle-v7.patch qmodem-radio-rpc-v6.patch qmodem-at-transport-v6.patch qmodem-connectivity-v5.patch qmodem-mega-policy-ui.patch qmodem-performance-ui.patch qmodem-5g-deployment.patch qmodem-cell-discovery.patch qmodem-dual-runtime.patch; do
     stack_patch="$(dirname "${FILES_OVERLAY_DIR}")/patches/$patch_name"
     # --force disables GNU patch's automatic reversal guessing. In batch

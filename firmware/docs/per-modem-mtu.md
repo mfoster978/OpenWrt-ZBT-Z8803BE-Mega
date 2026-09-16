@@ -13,7 +13,8 @@ modem. Under its advanced settings, **Cellular MTU** accepts an integer from
 - Modem 1: `qmodem.4_1.mtu`
 - Modem 2: `qmodem.2_1.mtu`
 
-An absent or malformed UCI value falls back to 1500 at runtime. The fallback
+The modem profile seeds 1500 only for a missing option and preserves existing
+owner settings. An absent or malformed UCI value falls back to 1500 at runtime. The fallback
 never rewrites the saved configuration. Opening the UI does not write defaults;
 Save & Apply uses the existing QModem/UCI apply path. Valid existing values are
 retained. Bridge mode hides the field without deleting its saved value, and the
@@ -42,8 +43,11 @@ local host-interface MTU, not a guarantee of the end-to-end carrier path MTU.
 ## Build and regression checks
 
 The UI addition is the separate `qmodem-mtu-v17.patch`, applied after v16 and
-unwound before v16 for cached builds. Existing patches are unchanged. Firmware
-input checks run `node --test firmware/tests/qmi-mtu.test.cjs`; the pinned-patch
+unwound before v16 for cached builds. The original pre-MTU v16 patch is restored;
+a reverse-only compatibility patch recognizes the brief PR #7 variant that
+embedded MTU in v16. Tests execute the actual builder cleanup on clean, original
+v16, PR #7 v16, and v17 caches, and preserve unrecognized local edits. Firmware
+input checks run `node --test firmware/tests/qmi-mtu*.test.cjs`; the pinned-patch
 suite checks the complete forward/reverse stack and JavaScript syntax. These
 software tests cover policy and isolation, not long-duration modem hardware or
 carrier testing of custom values.
