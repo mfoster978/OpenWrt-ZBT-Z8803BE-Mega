@@ -150,11 +150,12 @@ zbt_lan_ipv6_once() {
 	policy=$(uci -q get "qmodem.$modem.lan_ipv6_policy")
 	case "$policy" in
 		auto)
-			# QModem's explicit relay/extended-prefix features are advanced owner
-			# choices and take precedence over Mega's PD guard.
-			if [ "$(uci -q get "qmodem.$modem.ra_master")" = 1 ] || [ "$(uci -q get "qmodem.$modem.extend_prefix")" = 1 ]; then
-				zbt_lan_ipv6_release
-			elif zbt_lan_ipv6_has_pd "${modem}v6"; then
+			# Auto is an explicit owner policy: require real delegated-prefix
+			# evidence. QModem's extend_prefix/ra_master flags may be enabled by
+			# normal profiles even when the carrier provides no usable PD, so they
+			# must not silently defeat Auto. Actual relay/hybrid LAN configurations
+			# are still protected inside zbt_lan_ipv6_suppress().
+			if zbt_lan_ipv6_has_pd "${modem}v6"; then
 				zbt_lan_ipv6_release
 			else
 				zbt_lan_ipv6_suppress
