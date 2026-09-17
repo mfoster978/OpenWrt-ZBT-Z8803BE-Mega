@@ -98,7 +98,7 @@ ${body}
   };
 }
 
-test('manual policy is the safe default and never changes LAN IPv6', () => {
+test('explicit manual policy preserves LAN IPv6 without changes', () => {
   const f = fixture({ winner6: '4_1v6', policy4: 'manual', pd: false });
   assert.equal(f.ra, 'server');
   assert.equal(f.dhcpv6, 'server');
@@ -231,7 +231,7 @@ test('QModem edit field has safe choices and uses the real LuCI render signature
     assert.equal(type, ListValue); assert.equal(key, 'lan_ipv6_policy'); assert.equal(title, 'LAN IPv6'); return option;
   } };
   new Function('form', 's', '_', 'E', 'var o;\n' + additions)(form, s, x => x, tag => ({ tag }));
-  assert.equal(option.default, 'manual');
+  assert.equal(option.default, 'auto');
   assert.equal(option.rmempty, false);
   assert.equal(option.modalonly, true);
   assert.equal(option.retain, true);

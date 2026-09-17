@@ -74,7 +74,7 @@ test -s firmware/patches/qmodem-lan-ipv6-v18.patch
 test -s firmware/patches/qmodem-mtu-legacy-v16.patch
 grep -Fq 'qmodem-mtu-v17.patch' firmware/docker/build-openwrt.sh
 grep -Fq 'qmodem-lan-ipv6-v18.patch' firmware/docker/build-openwrt.sh
-grep -Fq 'lan_ipv6_policy=manual' firmware/files/usr/sbin/zbt-qmodem-profile
+grep -Fq 'lan_ipv6_policy=auto' firmware/files/usr/sbin/zbt-qmodem-profile
 grep -Fq 'zbt_lan_ipv6_has_pd' firmware/files/usr/sbin/zbt-lan-ipv6-guard
 grep -Fq 'ip link set dev "$modem_netcard" mtu "$target_mtu"' firmware/files/usr/lib/zbt/qmi-session.sh
 grep -Fq '[ "$oldrx" -gt 0 ]' firmware/files/usr/lib/zbt/modem-recovery.sh
