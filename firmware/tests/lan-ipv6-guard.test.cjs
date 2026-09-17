@@ -186,13 +186,13 @@ test('relay, hybrid and mixed LAN configurations are never overwritten', () => {
   }
 });
 
-test('QModem explicit relay or extended-prefix choices take precedence over Auto', () => {
-  for (const options of [{ raMaster4: true }, { extend4: true }]) {
+test('explicit Auto is not defeated by dormant QModem ra_master or extend_prefix flags', () => {
+  for (const options of [{ raMaster4: true }, { extend4: true }, { raMaster4: true, extend4: true }]) {
     const f = fixture({ winner6: '4_1v6', policy4: 'auto', pd: false, ...options });
-    assert.equal(f.ra, 'server');
-    assert.equal(f.dhcpv6, 'server');
-    assert.equal(f.state, '');
-    assert.equal(f.calls, '');
+    assert.equal(f.ra, 'disabled');
+    assert.equal(f.dhcpv6, 'disabled');
+    assert.equal(f.state, 'version=1\nra=server\ndhcpv6=server\n');
+    assert.match(f.calls, /action=suppress result=ok/);
   }
 });
 
